@@ -1,0 +1,175 @@
+---
+title: "PWHL"
+format: html
+editor: visual
+---
+
+```{r}
+#--------------------------------Libraries
+library(tidyverse)
+library(here)
+library(janitor)
+library(lubridate)
+library(fastRhockey)
+library(rvest)
+library(tidylog)
+library(patchwork)
+library(ggtext)
+```
+
+```{r}
+#--------------------------------Data
+games <- pwhl_schedule(2024) %>%
+  as.tibble(.) %>%
+  mutate(game_num = row_number(),
+         game_played = ifelse(str_detect(game_status, "Final"), TRUE, FALSE))
+standings <- pwhl_standings(2024)
+if (file.exists(here("data/game_plays.csv"))) {
+  game_plays <- read_csv(here("data/game_plays.csv"))
+  i_min <- n_distinct(game_plays$game_id)+1
+  i_max <- nrow(games[games$game_played==TRUE,])
+  if (i_max > i_min) {
+    for (i in i_min:i_max) {
+      id <- games$game_id[[i]]
+      temp <- pwhl_pbp(id)
+      game_plays <- game_plays %>%
+      bind_rows(temp)
+      }
+}
+  } else {
+  game_plays <- tibble()
+    for (i in 1:nrow(games[games$game_played==TRUE,])) {
+    id <- games$game_id[[i]]
+    temp <- pwhl_pbp(id)
+    game_plays <- game_plays %>%
+    bind_rows(temp)
+    }
+}
+write_csv(game_plays, here("data/game_plays.csv"))
+#----------------Attendance: get from each game table online
+game_ids_played <- games %>%
+  filter(game_played == T) %>% 
+  pull(game_id)
+attendance <- tibble(game_id = numeric(),
+                     attendance = numeric())
+for (i in 1:length(game_ids_played)) {
+  curr_id <- game_ids_played[[i]]
+  curr_url <- paste0("https://lscluster.hockeytech.com/game_reports/official-game-report.php?client_code=pwhl&game_id=", curr_id)
+curr_att <- read_html(curr_url)%>% 
+  html_element("table")%>%
+  html_table() %>%
+  filter(X1 == "Attendance:") %>%
+  mutate(game_id = as.numeric(curr_id),
+         X2 = as.numeric(X2)) %>%
+  select(game_id, attendance = X2) 
+attendance[nrow(attendance)+1,] <- curr_att
+}
+
+capacities <- read_csv(here("data/capacities.csv"))
+
+games <- games %>%
+  mutate(game_id = as.numeric(game_id)) %>%
+  left_join(attendance) %>%
+  left_join(capacities)
+
+```
+
+```{r}
+team_colours <- structure(c("#154734", "#361E51", "#721415", "#00B2A9", "#BA1C13", "#307FE2"), .Names = c("Boston", "Minnesota", "Montreal", "New York", "Ottawa", "Toronto"))
+```
+
+```{r}
+
+get_png <- function(filename) {
+  grid::rasterGrob(png::readPNG(filename), interpolate = TRUE)
+}
+
+pwhl_logo <- get_png(here("data/pwhl.png"))
+
+games %>% 
+  filter(game_played == T) %>% 
+  group_by(game_num, home_team, away_team, venue, attendance, capacity) %>%
+  summarize(percent_capacity = attendance/capacity*100) %>% 
+  mutate(team_venue = paste(home_team, venue)) %>%
+  group_by(venue) %>% 
+  mutate(game_num_at_venue = row_number()) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = game_num_at_venue, y = percent_capacity, fill = home_team)) +
+  geom_col() +
+  facet_wrap(~team_venue, nrow = 2) +
+  scale_fill_manual(values = team_colours)
+
+p_pct_att <- games %>% 
+  filter(game_played == T) %>% 
+  group_by(game_num, home_team, away_team, venue, attendance, capacity) %>%
+  summarize(percent_capacity = attendance/capacity) %>% 
+  mutate(team_venue = paste(home_team, venue)) %>%
+  ungroup() %>%
+  arrange(desc(percent_capacity)) %>%
+  mutate(xorder = paste(row_number(), home_team),
+         xorder = fct_inorder(xorder)) %>% 
+  ggplot(aes(x = xorder, y = percent_capacity, fill = home_team)) +
+  geom_col(width = .85) +
+  scale_fill_manual(values = c("Arena capacity"="#e1e1e1", team_colours))+
+  scale_y_continuous(labels = scales::percent) +
+  ggtitle("Attendance as a percent of venue capacity") +
+  labs(fill = "Home Team",
+       y = "Percent venue capacity",
+       x = "Games played (in descending order of y-axis metric)",
+       caption = "Data sources:\n• game info - fastRhockey R package\n• attendance info - PWHL official website\n• venue capacity info - Wikipedia/venue official websites where available") +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_text(size = 10),
+        axis.ticks.x = element_blank(),
+        plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        panel.grid.major.x = element_blank(),
+        panel.background = element_rect(fill = "#f7f7f7"),
+        plot.title = element_text(hjust = 0.5, size = 15),
+        legend.position = "none") 
+
+p_raw_att <- games %>% 
+    filter(game_played == T) %>% 
+    group_by(game_num, home_team, away_team, venue, attendance, capacity) %>%
+    arrange(desc(attendance)) %>%
+    group_by(venue) %>% 
+    mutate(game_num_at_venue = row_number()) %>% 
+    ungroup() %>% 
+    mutate(xorder = paste(home_team, venue, game_num_at_venue),
+           xorder = fct_inorder(xorder)) %>% 
+  mutate(capacity_diff = ifelse(capacity > attendance, capacity - attendance, NA)) %>% 
+  pivot_longer(c(attendance, capacity_diff), 
+               names_to = "metric", values_to = "attendance") %>% 
+  mutate(home_team = ifelse(metric == "capacity_diff", "Arena capacity", home_team)) %>%
+    ggplot(aes(x = xorder, y = attendance, fill = home_team, alpha = metric)) +
+    geom_bar(width = .85, position = "stack", stat = "identity") +
+    annotate("text", x = 1.5, y = max(games$attendance, na.rm = T)-2500, 
+             label = " — Battle on Bay Street (Scotiabank Arena)",
+             color = team_colours["Toronto"],
+             hjust = 0,
+             size = 3) +
+    scale_fill_manual(values = c("Arena capacity"="#e1e1e1", team_colours)) +
+    scale_alpha_manual(values = c(1, .5), guide = "none") +
+  scale_y_continuous(labels = scales::comma) +
+    ggtitle("Raw Attendance") +
+    labs(fill = "Home Team",
+         y = "Number of spectators",
+         x = "Games played (in descending order of y-axis metric)") +
+    theme(axis.text.x = element_blank(),
+          axis.title.x = element_text(size = 10),
+          axis.ticks.x = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.background = element_rect(fill = "#f7f7f7"),
+          plot.title = element_text(hjust = 0.5, size = 15)) 
+
+
+p_raw_att / p_pct_att + 
+    inset_element(pwhl_logo, left = .89, bottom = .01, right = .99, top = .11, align_to = "full") +
+  plot_layout(guides = 'collect') +
+  plot_annotation(title = paste0("<span style = 'color: ", team_colours["Toronto"], ";'>PWHL Toronto</span> attendance limited by venue capacity\n"), 
+                  theme = theme(plot.title = ggtext::element_markdown(size = 19))) 
+
+ggsave(here("visualizations/toronto_venue.png"), width = 6.5, height = 6, units = "in")
+```
+
+```{r}
+
+```
