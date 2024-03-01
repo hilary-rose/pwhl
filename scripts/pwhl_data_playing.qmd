@@ -121,6 +121,7 @@ p_pct_att <- games %>%
         axis.title.x = element_text(size = 10),
         axis.ticks.x = element_blank(),
         plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        plot.caption.position = "plot",
         panel.grid.major.x = element_blank(),
         panel.background = element_rect(fill = "#f7f7f7"),
         plot.title = element_text(hjust = 0.5, size = 15),
