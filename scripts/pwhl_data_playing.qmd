@@ -4,6 +4,8 @@ format: html
 editor: visual
 ---
 
+#Libraries
+
 ```{r}
 #--------------------------------Libraries
 library(tidyverse)
@@ -12,10 +14,16 @@ library(janitor)
 library(lubridate)
 library(fastRhockey)
 library(rvest)
-library(tidylog)
+library(ggpubr)
 library(patchwork)
 library(ggtext)
+library(ggh4x)
+library(tidylog)
+
+col_scheme <- "official" #choose "official" or "colourblind"
 ```
+
+#Data
 
 ```{r}
 #--------------------------------Data
@@ -25,13 +33,16 @@ games <- pwhl_schedule(2024) %>%
          game_played = ifelse(str_detect(game_status, "Final"), TRUE, FALSE))
 standings <- pwhl_standings(2024)
 if (file.exists(here("data/game_plays.csv"))) {
-  game_plays <- read_csv(here("data/game_plays.csv"))
+  game_plays <- read_csv(here("data/game_plays.csv")) %>%
+    mutate(time_of_period = str_remove(time_of_period, ":00$"))
+  col_types <- map(game_plays, class)
   i_min <- n_distinct(game_plays$game_id)+1
   i_max <- nrow(games[games$game_played==TRUE,])
   if (i_max > i_min) {
     for (i in i_min:i_max) {
       id <- games$game_id[[i]]
-      temp <- pwhl_pbp(id)
+      temp <- pwhl_pbp(id) %>%
+        mutate(across(c(period_of_game, empty_net, game_winner, penalty_shot, insurance, short_handed, penalty_length), as.numeric)) 
       game_plays <- game_plays %>%
       bind_rows(temp)
       }
@@ -40,7 +51,8 @@ if (file.exists(here("data/game_plays.csv"))) {
   game_plays <- tibble()
     for (i in 1:nrow(games[games$game_played==TRUE,])) {
     id <- games$game_id[[i]]
-    temp <- pwhl_pbp(id)
+    temp <- pwhl_pbp(id) %>%
+        mutate(across(c(period_of_game, empty_net, game_winner, penalty_shot, insurance, short_handed, penalty_length), as.numeric)) %>%
     game_plays <- game_plays %>%
     bind_rows(temp)
     }
@@ -74,9 +86,20 @@ games <- games %>%
 
 ```
 
+#Colour schemes
+
 ```{r}
-team_colours <- structure(c("#154734", "#361E51", "#721415", "#00B2A9", "#BA1C13", "#307FE2"), .Names = c("Boston", "Minnesota", "Montreal", "New York", "Ottawa", "Toronto"))
+
+if (col_scheme == "official") {
+team_colours <- structure(c("#154734", "#2E1A47", "#862633", "#00B2A9", "#A6192E", "#307FE2"), .Names = c("Boston", "Minnesota", "Montreal", "New York", "Ottawa", "Toronto"))
+
+} else if (col_scheme == "colourblind") {
+#colourblind palette created using this tool https://davidmathlogic.com/colorblind/#%23007326-%2300DCB7-%232AAFEC-%23FF483A-%236F2AAB-%23730606
+team_colours <- structure(c("#007326", "#6F2AAB", "#730606", "#00DCB7", "#FF483A", "#2AAFEC"), .Names = c("Boston", "Minnesota", "Montreal", "New York", "Ottawa", "Toronto"))
+}
 ```
+
+#Attendance
 
 ```{r}
 
@@ -84,7 +107,12 @@ get_png <- function(filename) {
   grid::rasterGrob(png::readPNG(filename), interpolate = TRUE)
 }
 
-pwhl_logo <- get_png(here("data/pwhl.png"))
+pwhl_logo <- get_png(here("data/pwhl_logo.png"))
+
+bobs_attendance <- games %>%
+  filter(game_id == 30) %>%
+  mutate(attendance = format(attendance, big.mark = ",")) %>%
+  pull(attendance)
 
 games %>% 
   filter(game_played == T) %>% 
@@ -116,7 +144,7 @@ p_pct_att <- games %>%
   labs(fill = "Home Team",
        y = "Percent venue capacity",
        x = "Games played (in descending order of y-axis metric)",
-       caption = "Data sources:\n• game info - fastRhockey R package\n• attendance info - PWHL official website\n• venue capacity info - Wikipedia/venue official websites where available") +
+       caption = "Data sources:\n• Game info - fastRhockey R package\n• Attendance info - PWHL official website\n• Venue capacity info - Wikipedia/venue official websites where available") +
   theme(axis.text.x = element_blank(),
         axis.title.x = element_text(size = 10),
         axis.ticks.x = element_blank(),
@@ -143,12 +171,12 @@ p_raw_att <- games %>%
     ggplot(aes(x = xorder, y = attendance, fill = home_team, alpha = metric)) +
     geom_bar(width = .85, position = "stack", stat = "identity") +
     annotate("text", x = 1.5, y = max(games$attendance, na.rm = T)-2500, 
-             label = " — Battle on Bay Street (Scotiabank Arena)",
+             label = paste(" — Battle on Bay Street (Scotiabank Arena) -", bobs_attendance, "spectators"),
              color = team_colours["Toronto"],
              hjust = 0,
              size = 3) +
-    scale_fill_manual(values = c("Arena capacity"="#e1e1e1", team_colours)) +
-    scale_alpha_manual(values = c(1, .5), guide = "none") +
+    scale_fill_manual(values = c("Arena capacity"="#e5e5e5", team_colours)) +
+    scale_alpha_manual(values = c(1, .75), guide = "none") +
   scale_y_continuous(labels = scales::comma) +
     ggtitle("Raw Attendance") +
     labs(fill = "Home Team",
@@ -168,9 +196,185 @@ p_raw_att / p_pct_att +
   plot_annotation(title = paste0("<span style = 'color: ", team_colours["Toronto"], ";'>PWHL Toronto</span> attendance limited by venue capacity\n"), 
                   theme = theme(plot.title = ggtext::element_markdown(size = 19))) 
 
-ggsave(here("visualizations/toronto_venue.png"), width = 6.5, height = 6, units = "in")
+ggsave(here(paste0("visualizations/toronto_venue_", col_scheme, "_colours.png")), width = 6.5, height = 6, units = "in")
+```
+#Chronological attendance... revisit this later, not sure it's insightful
+```{# {r}
+# 
+# chron_attendance <- games %>% 
+#     filter(game_played == T) %>% 
+#     group_by(game_num, home_team, away_team, venue, attendance, capacity) %>%
+#   mutate(day_of_week = ifelse(str_detect(game_date, "Sat") | str_detect(game_date, "Sun"), "weekend", "weekday"),
+#          game_date = lubridate::ymd(paste0("2024 ", str_sub(game_date, 6, -1)))) %>%
+#     arrange(game_date) %>%
+#     group_by(venue) %>% 
+#     mutate(game_num_at_venue = row_number()) %>% 
+#     ungroup() %>% 
+#   mutate(capacity_diff = ifelse(capacity > attendance, capacity - attendance, NA)) 
+#   
+#   chron_capacity <- chron_attendance %>%
+#   select(home_team, venue, game_date, day_of_week, game_num_at_venue, attendance = capacity) %>%
+#     mutate(home_team = factor(home_team, levels = c("Boston", "Ottawa", "Minnesota", "Montreal", "New York", "Toronto")))
+#   
+#   library(gg4hx)
+#   
+#   chron_attendance %>%
+#     mutate(home_team = factor(home_team, levels = c("Boston", "Ottawa", "Minnesota", "Montreal", "New York", "Toronto"))) %>%
+#     ggplot(aes(x = game_num_at_venue, y = attendance, fill = home_team, alpha = day_of_week)) +
+#     geom_col(width = .85, fill = "#e5e5e5", data = chron_capacity, alpha = .75) +
+#     geom_col(width = .85) +
+#     facet_wrap2(vars(home_team, venue),  strip = strip_split()) +
+#     scale_fill_manual(values = team_colours) +
+#     scale_alpha_manual(values = c(1, .5)) +
+#   scale_y_continuous(labels = scales::comma) +
+#     ggtitle("Raw Attendance") +
+#     labs(fill = "Home Team",
+#          y = "Number of spectators",
+#          x = "Games played at venue (chronological order)") +
+#     theme(strip.placement = "outside",
+#           axis.title.x = element_text(size = 10),
+#           axis.ticks.x = element_blank(),
+#           panel.grid.major.x = element_blank(),
+#           panel.background = element_rect(fill = "#f7f7f7"),
+#           plot.title = element_text(hjust = 0.5, size = 15)) 
+
 ```
 
+#Goals scored for
+
 ```{r}
+library(ggpubr)
+
+# read any image from computer for background
+rink = png::readPNG(here("data/rinklight.png"))
+
+goals <- game_plays %>%
+  filter(event == "goal") %>%
+  left_join(pwhl_teams() %>% 
+              select(team_id, team_label, team_code) %>%
+              mutate(team_id = as.numeric(team_id))) %>%
+          mutate(x_coord = case_when(is.na(x_coord_original) ~ x_coord,
+                             TRUE ~ x_coord_original),
+              y_coord = case_when(is.na(y_coord_original) ~ y_coord,
+                             TRUE ~ y_coord_original)) %>%
+  group_by(team_label) %>%
+  mutate(num_goals_for = n(),
+         facet_label = paste(team_label, "-", num_goals_for, "goals for")) %>%
+  ungroup()
+
+goals %>%
+  ggplot(aes(x = x_coord, y = y_coord, color = team_label)) +
+  background_image(rink) +
+  geom_point(size = 2, alpha = .8, stroke = NA) +
+  scale_color_manual(values = team_colours) +
+  labs(color = "Team") +
+  theme_void() +
+  ggtitle("Where on the ice do teams score from?") +
+  theme(legend.position = "bottom",
+        legend.title=element_blank(),
+        plot.background = element_rect(fill = "#FFFFFF"),
+        legend.text = element_text(size = 7),
+        legend.spacing.x = unit(.05, 'cm'),
+        plot.title = element_text(hjust = 0.5)) +
+  guides(color = guide_legend(nrow = 1))
+
+ggsave(here(paste0("visualizations/goals_scored_", col_scheme, "_colours.png")), width = 1200, height = 725, units = "px")
+
+texts <- list(element_text(colour = team_colours[[1]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[2]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[3]], face = "bold"),element_text(colour = team_colours[[4]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[5]], face = "bold"), element_text(colour = team_colours[[6]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")))
+
+goals %>%
+    ggplot(aes(x = x_coord, y = y_coord, color = team_label)) +
+    background_image(rink) +
+    geom_point(size = 1.75, alpha = .65, stroke = NA) +
+    scale_color_manual(values = team_colours) +
+    labs(color = "Team",
+         caption = "Data source: fastRhockey R package, 2024-03-15\nCreated by Hilary Killam") + 
+  facet_wrap2(~facet_label, nrow = 3, strip = strip_themed(text_x = texts)) +
+    theme_void() +
+  ggtitle("Where on the ice do teams score from?") +
+    theme(legend.position = "none",
+          legend.title=element_blank(),
+          plot.background = element_rect(fill = "#FFFFFF"),
+          plot.margin = unit(c(.25,.25,.25,.25), "cm"),
+          legend.text = element_text(size = 7),
+          legend.spacing.x = unit(.05, 'cm'),
+        plot.title = element_text(hjust = 0.5),
+        strip.text = element_text(size = 8),
+        plot.caption = element_text(color = "#555555", size = 6))
+
+ggsave(here(paste0("visualizations/goals_scored_by_team_", col_scheme, "_colours.png")), width = 1500, height = 1350, units = "px")
+
+```
+
+#Goals scored against
+
+```{r}
+
+library(ggpubr)
+
+# read any image from computer for background
+rink = png::readPNG(here("data/rinklight.png"))
+
+goals_against <- game_plays %>%
+  filter(event == "goal") %>%
+  left_join(pwhl_teams() %>% 
+              select(team_id, team_label, team_code) %>%
+              mutate(team_id = as.numeric(team_id))) %>%
+  select(game_id, event, team_id, team_label, team_code, player_id, player_name_first, player_name_last, player_position, x_coord, x_coord_original, y_coord, y_coord_original) %>%
+  left_join(games %>% select(game_id, home_team, away_team), by = "game_id") %>%
+  ungroup() %>%
+  mutate(goal_against = case_when(team_label == home_team ~ away_team,
+                                  team_label == away_team ~ home_team),
+         x_coord = case_when(is.na(x_coord_original) ~ x_coord,
+                             TRUE ~ x_coord_original),
+         y_coord = case_when(is.na(y_coord_original) ~ y_coord,
+                             TRUE ~ y_coord_original))  %>%
+  group_by(goal_against) %>%
+  mutate(num_goals_against = n(),
+         facet_label = paste(goal_against, "-", num_goals_against, "goals against")) %>%
+  ungroup()
+
+goals_against %>%
+  ggplot(aes(x = x_coord, y = y_coord, color = goal_against)) +
+  background_image(rink) +
+  geom_point(size = 2, alpha = .8, stroke = NA) +
+  scale_color_manual(values = team_colours) +
+  labs(color = "Team") +
+  theme_void() +
+  ggtitle("Where on the ice do teams get scored on?") +
+  theme(legend.position = "bottom",
+        legend.title=element_blank(),
+        plot.background = element_rect(fill = "#FFFFFF"),
+          plot.margin = unit(c(.25,.25,.25,.25), "cm"),
+        legend.text = element_text(size = 7),
+        legend.spacing.x = unit(.05, 'cm'),
+        plot.title = element_text(hjust = 0.5)) +
+  guides(color = guide_legend(nrow = 1))
+
+ggsave(here(paste0("visualizations/goals_scored_against", col_scheme, "_colours.png")), width = 1200, height = 725, units = "px")
+
+texts <- list(element_text(colour = team_colours[[1]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[2]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[3]], face = "bold"),element_text(colour = team_colours[[4]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[5]], face = "bold"), element_text(colour = team_colours[[6]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")))
+
+goals_against %>%
+    ggplot(aes(x = x_coord, y = y_coord, color = goal_against)) +
+    background_image(rink) +
+    geom_point(size = 1.75, alpha = .65, stroke = NA) +
+    scale_color_manual(values = team_colours) +
+    labs(color = "Team",
+         caption = "Data source: fastRhockey R package, 2024-03-15\nCreated by Hilary Killam") + 
+  facet_wrap2(~facet_label, nrow = 3, strip = strip_themed(text_x = texts)) +
+    theme_void() +
+  ggtitle("Where on the ice do teams get scored on?") +
+    theme(legend.position = "none",
+          legend.title = element_blank(),
+          plot.background = element_rect(fill = "#FFFFFF"),
+          plot.margin = unit(c(.25,.25,.25,.25), "cm"),
+          legend.text = element_text(size = 7),
+          legend.spacing.x = unit(.05, 'cm'),
+          plot.title = element_text(hjust = 0.5),
+          strip.text = element_text(size = 8),
+        plot.caption = element_text(color = "#555555", size = 6))
+
+ggsave(here(paste0("visualizations/goals_scored_against_team_", col_scheme, "_colours.png")), width = 1500, height = 1350, units = "px")
 
 ```
