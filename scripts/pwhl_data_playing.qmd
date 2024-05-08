@@ -1,7 +1,7 @@
 ---
 title: "PWHL"
 format: html
-editor: visual
+editor: source
 ---
 
 #Libraries
@@ -20,7 +20,8 @@ library(ggtext)
 library(ggh4x)
 library(tidylog)
 
-col_scheme <- "official" #choose "official" or "colourblind"
+col_scheme <- "brighter" #choose "official", "brighter" or "colourblind"
+`%notin%` <- negate(`%in%`)
 ```
 
 #Data
@@ -30,8 +31,12 @@ col_scheme <- "official" #choose "official" or "colourblind"
 games <- pwhl_schedule(2024) %>%
   as.tibble(.) %>%
   mutate(game_num = row_number(),
-         game_played = ifelse(str_detect(game_status, "Final"), TRUE, FALSE))
+         game_played = ifelse(str_detect(game_status, "Final"), TRUE, FALSE),
+         game_date = lubridate::ymd(paste0("2024-", str_sub(game_date, 6)))) %>%
+        mutate(across(c(game_id, home_team_id, away_team_id, home_score, away_score), as.numeric))
+
 standings <- pwhl_standings(2024)
+
 if (file.exists(here("data/game_plays.csv"))) {
   game_plays <- read_csv(here("data/game_plays.csv")) %>%
     mutate(time_of_period = str_remove(time_of_period, ":00$"))
@@ -42,7 +47,7 @@ if (file.exists(here("data/game_plays.csv"))) {
     for (i in i_min:i_max) {
       id <- games$game_id[[i]]
       temp <- pwhl_pbp(id) %>%
-        mutate(across(c(period_of_game, empty_net, game_winner, penalty_shot, insurance, short_handed, penalty_length), as.numeric)) 
+        mutate(across(c(period_of_game, empty_net, game_winner, penalty_shot, insurance, short_handed, penalty_length, home_team_id, away_team_id), as.numeric)) 
       game_plays <- game_plays %>%
       bind_rows(temp)
       }
@@ -50,9 +55,9 @@ if (file.exists(here("data/game_plays.csv"))) {
   } else {
   game_plays <- tibble()
     for (i in 1:nrow(games[games$game_played==TRUE,])) {
-    id <- games$game_id[[i]]
+    id <- as.numeric(games$game_id[[i]])
     temp <- pwhl_pbp(id) %>%
-        mutate(across(c(period_of_game, empty_net, game_winner, penalty_shot, insurance, short_handed, penalty_length), as.numeric)) %>%
+        mutate(across(c(period_of_game, empty_net, game_winner, penalty_shot, insurance, short_handed, penalty_length), as.numeric))
     game_plays <- game_plays %>%
     bind_rows(temp)
     }
@@ -62,6 +67,30 @@ write_csv(game_plays, here("data/game_plays.csv"))
 game_ids_played <- games %>%
   filter(game_played == T) %>% 
   pull(game_id)
+
+
+if (file.exists(here("data/attendance.csv"))) {
+  
+  attendance <- read_csv(here("data/attendance.csv")) 
+  col_types <- map(attendance, class)
+  i_min <- n_distinct(attendance$game_id)+1
+  i_max <- nrow(games[games$game_played==TRUE,])
+  if (i_max > i_min) {
+    for (i in i_min:i_max) {
+      curr_id <- game_ids_played[[i]]
+      curr_url <- paste0("https://lscluster.hockeytech.com/game_reports/official-game-report.php?client_code=pwhl&game_id=", curr_id)
+      curr_att <- read_html(curr_url)%>% 
+       html_element("table")%>%
+       html_table() %>%
+       filter(X1 == "Attendance:") %>%
+       mutate(game_id = as.numeric(curr_id),
+         X2 = as.numeric(X2)) %>%
+       select(game_id, attendance = X2) 
+      
+attendance[nrow(attendance)+1,] <- curr_att
+      }
+}
+  } else {
 attendance <- tibble(game_id = numeric(),
                      attendance = numeric())
 for (i in 1:length(game_ids_played)) {
@@ -76,6 +105,9 @@ curr_att <- read_html(curr_url)%>%
   select(game_id, attendance = X2) 
 attendance[nrow(attendance)+1,] <- curr_att
 }
+}
+
+write_csv(attendance, here("data/attendance.csv"))
 
 capacities <- read_csv(here("data/capacities.csv"))
 
@@ -83,6 +115,12 @@ games <- games %>%
   mutate(game_id = as.numeric(game_id)) %>%
   left_join(attendance) %>%
   left_join(capacities)
+
+get_png <- function(filename) {
+  grid::rasterGrob(png::readPNG(filename), interpolate = TRUE)
+}
+
+pwhl_logo <- get_png(here("data/pwhl_logo.png"))
 
 ```
 
@@ -96,6 +134,9 @@ team_colours <- structure(c("#154734", "#2E1A47", "#862633", "#00B2A9", "#A6192E
 } else if (col_scheme == "colourblind") {
 #colourblind palette created using this tool https://davidmathlogic.com/colorblind/#%23007326-%2300DCB7-%232AAFEC-%23FF483A-%236F2AAB-%23730606
 team_colours <- structure(c("#007326", "#6F2AAB", "#730606", "#00DCB7", "#FF483A", "#2AAFEC"), .Names = c("Boston", "Minnesota", "Montreal", "New York", "Ottawa", "Toronto"))
+} else if (col_scheme == "brighter") {
+#colourblind palette created using this tool https://davidmathlogic.com/colorblind/#%23007326-%2300DCB7-%232AAFEC-%23FF483A-%236F2AAB-%23730606
+team_colours <- structure(c("#1C5940", "#352056", "#6D1620", "#00B2A9", "#D31818", "#307FE2"), .Names = c("Boston", "Minnesota", "Montreal", "New York", "Ottawa", "Toronto"))
 }
 ```
 
@@ -103,14 +144,14 @@ team_colours <- structure(c("#007326", "#6F2AAB", "#730606", "#00DCB7", "#FF483A
 
 ```{r}
 
-get_png <- function(filename) {
-  grid::rasterGrob(png::readPNG(filename), interpolate = TRUE)
-}
-
-pwhl_logo <- get_png(here("data/pwhl_logo.png"))
 
 bobs_attendance <- games %>%
   filter(game_id == 30) %>%
+  mutate(attendance = format(attendance, big.mark = ",")) %>%
+  pull(attendance)
+
+batt_attendance <- games %>%
+  filter(game_id == 67) %>%
   mutate(attendance = format(attendance, big.mark = ",")) %>%
   pull(attendance)
 
@@ -155,6 +196,10 @@ p_pct_att <- games %>%
         plot.title = element_text(hjust = 0.5, size = 15),
         legend.position = "none") 
 
+total_attendance <- games %>% 
+  summarize(tot_attendance = sum(attendance)) %>%
+  pull(tot_attendance)
+
 p_raw_att <- games %>% 
     filter(game_played == T) %>% 
     group_by(game_num, home_team, away_team, venue, attendance, capacity) %>%
@@ -170,7 +215,12 @@ p_raw_att <- games %>%
   mutate(home_team = ifelse(metric == "capacity_diff", "Arena capacity", home_team)) %>%
     ggplot(aes(x = xorder, y = attendance, fill = home_team, alpha = metric)) +
     geom_bar(width = .85, position = "stack", stat = "identity") +
-    annotate("text", x = 1.5, y = max(games$attendance, na.rm = T)-2500, 
+  annotate("text", x = 0.5, y = max(games$attendance, na.rm = T)-500, 
+             label = paste(" — Battle at the Top (Bell Centre) -", batt_attendance, "spectators"),
+             color = team_colours["Montreal"],
+             hjust = 0,
+             size = 3) +
+  annotate("text", x = 1.5, y = sort(games$attendance, TRUE)[2]-2500, 
              label = paste(" — Battle on Bay Street (Scotiabank Arena) -", bobs_attendance, "spectators"),
              color = team_colours["Toronto"],
              hjust = 0,
@@ -178,7 +228,7 @@ p_raw_att <- games %>%
     scale_fill_manual(values = c("Arena capacity"="#e5e5e5", team_colours)) +
     scale_alpha_manual(values = c(1, .75), guide = "none") +
   scale_y_continuous(labels = scales::comma) +
-    ggtitle("Raw Attendance") +
+    ggtitle(paste0("Raw Attendance (", format(total_attendance, big.mark = ","), " total spectators)")) +
     labs(fill = "Home Team",
          y = "Number of spectators",
          x = "Games played (in descending order of y-axis metric)") +
@@ -191,54 +241,15 @@ p_raw_att <- games %>%
 
 
 p_raw_att / p_pct_att + 
-    inset_element(pwhl_logo, left = .89, bottom = .01, right = .99, top = .11, align_to = "full") +
+    inset_element(pwhl_logo, left = .95, bottom = .01, right = 1, top = .11, align_to = "full") +
   plot_layout(guides = 'collect') +
-  plot_annotation(title = paste0("<span style = 'color: ", team_colours["Toronto"], ";'>PWHL Toronto</span> attendance limited by venue capacity\n"), 
-                  theme = theme(plot.title = ggtext::element_markdown(size = 19))) 
+  plot_annotation(title = paste0("PWHL inaugural regular season:<br/><span style = 'color: ", team_colours["Toronto"], ";'>Toronto</span> attendance most limited by venue capacity\n"), 
+                  theme = theme(plot.title = ggtext::element_markdown(size = 19,
+                                hjust = .5)))
 
-ggsave(here(paste0("visualizations/toronto_venue_", col_scheme, "_colours.png")), width = 6.5, height = 6, units = "in")
+ggsave(here(paste0("visualizations/toronto_venue_", col_scheme, "_colours.png")), width = 7, height = 6, units = "in")
 ```
-#Chronological attendance... revisit this later, not sure it's insightful
-```{# {r}
-# 
-# chron_attendance <- games %>% 
-#     filter(game_played == T) %>% 
-#     group_by(game_num, home_team, away_team, venue, attendance, capacity) %>%
-#   mutate(day_of_week = ifelse(str_detect(game_date, "Sat") | str_detect(game_date, "Sun"), "weekend", "weekday"),
-#          game_date = lubridate::ymd(paste0("2024 ", str_sub(game_date, 6, -1)))) %>%
-#     arrange(game_date) %>%
-#     group_by(venue) %>% 
-#     mutate(game_num_at_venue = row_number()) %>% 
-#     ungroup() %>% 
-#   mutate(capacity_diff = ifelse(capacity > attendance, capacity - attendance, NA)) 
-#   
-#   chron_capacity <- chron_attendance %>%
-#   select(home_team, venue, game_date, day_of_week, game_num_at_venue, attendance = capacity) %>%
-#     mutate(home_team = factor(home_team, levels = c("Boston", "Ottawa", "Minnesota", "Montreal", "New York", "Toronto")))
-#   
-#   library(gg4hx)
-#   
-#   chron_attendance %>%
-#     mutate(home_team = factor(home_team, levels = c("Boston", "Ottawa", "Minnesota", "Montreal", "New York", "Toronto"))) %>%
-#     ggplot(aes(x = game_num_at_venue, y = attendance, fill = home_team, alpha = day_of_week)) +
-#     geom_col(width = .85, fill = "#e5e5e5", data = chron_capacity, alpha = .75) +
-#     geom_col(width = .85) +
-#     facet_wrap2(vars(home_team, venue),  strip = strip_split()) +
-#     scale_fill_manual(values = team_colours) +
-#     scale_alpha_manual(values = c(1, .5)) +
-#   scale_y_continuous(labels = scales::comma) +
-#     ggtitle("Raw Attendance") +
-#     labs(fill = "Home Team",
-#          y = "Number of spectators",
-#          x = "Games played at venue (chronological order)") +
-#     theme(strip.placement = "outside",
-#           axis.title.x = element_text(size = 10),
-#           axis.ticks.x = element_blank(),
-#           panel.grid.major.x = element_blank(),
-#           panel.background = element_rect(fill = "#f7f7f7"),
-#           plot.title = element_text(hjust = 0.5, size = 15)) 
 
-```
 
 #Goals scored for
 
@@ -246,63 +257,186 @@ ggsave(here(paste0("visualizations/toronto_venue_", col_scheme, "_colours.png"))
 library(ggpubr)
 
 # read any image from computer for background
-rink = png::readPNG(here("data/rinklight.png"))
+rink = png::readPNG(here("data/halfrinklight.png"))
 
 goals <- game_plays %>%
   filter(event == "goal") %>%
+  select(-contains("home"), -contains("away")) %>%
+  left_join(games %>% select(game_id, home_team, away_team)) %>%
   left_join(pwhl_teams() %>% 
               select(team_id, team_label, team_code) %>%
-              mutate(team_id = as.numeric(team_id))) %>%
-          mutate(x_coord = case_when(is.na(x_coord_original) ~ x_coord,
-                             TRUE ~ x_coord_original),
-              y_coord = case_when(is.na(y_coord_original) ~ y_coord,
-                             TRUE ~ y_coord_original)) %>%
+              mutate(team_id = as.numeric(team_id))) %>% 
   group_by(team_label) %>%
   mutate(num_goals_for = n(),
-         facet_label = paste(team_label, "-", num_goals_for, "goals for")) %>%
-  ungroup()
+         facet_label = paste("–", team_label, "–", "\n", num_goals_for, "goals for")) %>%
+  ungroup() %>%
+  group_by(away_team) %>%
+  mutate(num_goals_against = n()) %>%
+  ungroup() %>%
+  select(game_id, team_id, home_team, away_team, team_label, team_code, event, period_of_game, time_of_period, player_id, player_name_first, player_name_last, player_position, contains("coord"), event_type, goal, empty_net, insurance, penalty_shot, power_play, short_handed, penalty_length, game_date, minute_start, second_start, clock, sec_from_start, start_power_play, end_power_play, num_goals_for, num_goals_against, facet_label) %>%
+  mutate(home_goal = ifelse(home_team == team_label, 1, 0),
+         away_goal = ifelse(away_team == team_label, 1, 0),
+         where_goal = ifelse(home_team == team_label, "home goal", "away goal"))
 
-goals %>%
-  ggplot(aes(x = x_coord, y = y_coord, color = team_label)) +
-  background_image(rink) +
-  geom_point(size = 2, alpha = .8, stroke = NA) +
-  scale_color_manual(values = team_colours) +
-  labs(color = "Team") +
-  theme_void() +
-  ggtitle("Where on the ice do teams score from?") +
-  theme(legend.position = "bottom",
-        legend.title=element_blank(),
-        plot.background = element_rect(fill = "#FFFFFF"),
-        legend.text = element_text(size = 7),
-        legend.spacing.x = unit(.05, 'cm'),
-        plot.title = element_text(hjust = 0.5)) +
-  guides(color = guide_legend(nrow = 1))
+#check weirdness in data... according to plots on PWHL website, the y values seems to go from zero (high) to max y coordinate (low)
 
-ggsave(here(paste0("visualizations/goals_scored_", col_scheme, "_colours.png")), width = 1200, height = 725, units = "px")
+#home team *should* be scoring on the left in period 1, right in period 2, left in period 3, and right in OT. Manually check which side empty net goals are from and add to CSV file.
+
+empty_net_goals <- read_csv(here("data/empty_net_rink_sides.csv"), col_types = cols(time_of_period = col_character()))
+
+goals <- goals %>%
+  mutate(y_coord_flipped = 303 - y_coord_original) %>%
+  left_join(empty_net_goals) %>%
+  mutate(rink_side = case_when(side == "near" & home_goal == 1 ~ "L",
+                               side == "near" & away_goal == 1 ~ "R",
+                               side == "far" & home_goal == 1 ~ "R",
+                               side == "far" & away_goal == 1 ~ "L",
+                               home_goal == 1 & period_of_game == 1 ~ "L",
+                               home_goal == 1 & period_of_game == 2 ~ "R",
+                               home_goal == 1 & period_of_game == 3 ~ "L",
+                               home_goal == 1 & period_of_game == 4 ~ "R",
+                               away_goal == 1 & period_of_game == 1 ~ "R",
+                               away_goal == 1 & period_of_game == 2 ~ "L",
+                               away_goal == 1 & period_of_game == 3 ~ "R",
+                               away_goal == 1 & period_of_game == 4 ~ "L")) %>% 
+  mutate(side_corrected_x = case_when(rink_side == "L" & x_coord_original > 299 ~ 599 - x_coord_original,
+                                      rink_side == "R" & x_coord_original <= 299 ~ 599 - x_coord_original,
+                                      TRUE ~ x_coord_original),
+         side_corrected_y = case_when(side == "far" ~ y_coord_flipped,
+                                      rink_side == "L" & x_coord_original > 299 ~ 303 - y_coord_flipped,
+                                      rink_side == "R" & x_coord_original <= 299 ~ 303 - y_coord_flipped,
+                                      TRUE ~ y_coord_flipped)) %>%
+  mutate(same_side_x = case_when(period_of_game == 2 | period_of_game == 4 ~ 599 - side_corrected_x,
+                                 TRUE ~ side_corrected_x),
+         same_side_y = case_when(period_of_game == 2 | period_of_game == 4 ~ 303 - side_corrected_y,
+                                 TRUE ~ side_corrected_y))
+
+plots<- goals %>%
+  mutate(title = game_id) %>%
+  group_by(game_id) %>%
+  nest() %>%
+  mutate(plot=map(data, function(.x){ .x  %>%
+      ggplot(aes(x = same_side_x, y = same_side_y, color = team_label, size = as.character(empty_net))) + 
+  geom_point() +
+      geom_text(aes(label= player_name_last)) +
+  geom_vline(xintercept = 298.5) + scale_x_continuous(limits = c(0, 599)) + 
+  scale_y_continuous(limits = c(0, 303)) 
+  }))
+
+#plots$plot
+
+#Looks fine now, so flip all to one side of the ice for the visualizations, and rotate 90 degrees
+
+goals <- goals %>%
+  mutate(x_for_vis = case_when(home_goal == 1 ~ 303 - same_side_y,
+                               TRUE ~ same_side_y),
+         y_for_vis = case_when(home_goal == 1 ~ 599 - same_side_x,
+                               TRUE ~ same_side_x),
+         x_for_vis = abs(x_for_vis - 303),
+         x_for_vis = (x_for_vis/303)*85,
+         y_for_vis = (y_for_vis/599)*200)
+
+plots2<- goals %>%
+  mutate(title = game_id) %>%
+  group_by(game_id) %>%
+  nest() %>%
+  mutate(plot=map(data, function(.x){ .x  %>%
+      ggplot(aes(x = x_for_vis, y = y_for_vis, color = team_label, size = as.character(empty_net))) + 
+      geom_point() +
+      geom_text(aes(label= player_name_last)) +
+      geom_hline(yintercept = 100) + 
+      scale_x_continuous(limits = c(0, 85)) + 
+      scale_y_continuous(limits = c(0, 200)) +
+      labs(title = paste(as.character(.x$title), .x$game_date))
+  }))
+
+#plots2$plot
+
+```
+
+```{r}
+
+rink = png::readPNG(here("data/rinklightvertical.png"))
 
 texts <- list(element_text(colour = team_colours[[1]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[2]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[3]], face = "bold"),element_text(colour = team_colours[[4]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[5]], face = "bold"), element_text(colour = team_colours[[6]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")))
 
+goalplot_colors <- setNames(c(team_colours, "#FFC200"), c(names(team_colours), "Empty Net"))
+
 goals %>%
-    ggplot(aes(x = x_coord, y = y_coord, color = team_label)) +
+  mutate(team_label = case_when(empty_net == 1 ~ "Empty Net",
+                                TRUE ~ team_label)) %>%
+  mutate(team_label = fct_relevel(team_label, "Empty Net", after = Inf)) %>%
+    ggplot(aes(x = x_for_vis, y = y_for_vis, color = team_label)) +
     background_image(rink) +
-    geom_point(size = 1.75, alpha = .65, stroke = NA) +
-    scale_color_manual(values = team_colours) +
+    geom_point(size = 1.5, alpha = .5, stroke = NA) +
+  geom_text(aes(label = paste(player_name_last, game_id))) +
+    scale_color_manual(values = goalplot_colors, breaks = "Empty Net") +
+    scale_x_continuous(limits = c(0,85), expand = c(0,0)) +
+    scale_y_continuous(limits = c(0,200), expand = c(0,0)) +
+    scale_alpha_manual(guide = 'none') +
     labs(color = "Team",
-         caption = "Data source: fastRhockey R package, 2024-03-15\nCreated by Hilary Killam") + 
-  facet_wrap2(~facet_label, nrow = 3, strip = strip_themed(text_x = texts)) +
+         caption = paste0("Data source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam")) + 
+  facet_wrap2(~facet_label, nrow = 2, strip = strip_themed(text_x = texts), strip.position = "top") +
     theme_void() +
-  ggtitle("Where on the ice do teams score from?") +
-    theme(legend.position = "none",
+  ggtitle("PWHL inaugural regular season: Where on the ice did teams score from?") +
+    theme(
+          legend.position = "bottom",
           legend.title=element_blank(),
-          plot.background = element_rect(fill = "#FFFFFF"),
+          plot.background = element_rect(fill = "#FFFFFF", color = "#FFFFFF"),
           plot.margin = unit(c(.25,.25,.25,.25), "cm"),
           legend.text = element_text(size = 7),
           legend.spacing.x = unit(.05, 'cm'),
-        plot.title = element_text(hjust = 0.5),
-        strip.text = element_text(size = 8),
-        plot.caption = element_text(color = "#555555", size = 6))
+        plot.title = element_text(hjust = 0.5, margin=margin(5,0,2,0)),
+        strip.text = element_text(size = 7, margin=margin(0,0,2,0)),
+        plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        panel.background = element_blank(),
+        plot.caption.position = "plot",
+        panel.spacing = unit(.75, "lines")) +
+  guides(color = guide_legend(nrow = 1)) + 
+    inset_element(pwhl_logo, left = .9, bottom = .00, right = 1, top = .10, align_to = "full")
 
-ggsave(here(paste0("visualizations/goals_scored_by_team_", col_scheme, "_colours.png")), width = 1500, height = 1350, units = "px")
+
+# ggsave(here(paste0("visualizations/goals_scored_by_team_stacked", col_scheme, "_colours.png")), width = 1200, height = 2050, units = "px")
+
+spooner_goals <- goals %>%
+  filter(player_name_last == "Spooner") %>%
+  mutate(team_label = "Spooner Goals")
+
+p_gf <- goals %>%
+  mutate(team_label = case_when(empty_net == 1 ~ "Empty Net",
+                                TRUE ~ team_label)) %>%
+  mutate(team_label = fct_relevel(team_label, "Empty Net", after = Inf)) %>% 
+    ggplot(aes(x = x_for_vis, y = y_for_vis)) +
+    background_image(rink) +
+    geom_point(aes(color = team_label), size = 1.5, alpha = .5, stroke = NA) +
+    scale_color_manual(values = goalplot_colors, breaks = "Empty Net") +
+    scale_x_continuous(limits = c(0,85), expand = c(0,0)) +
+    scale_y_continuous(limits = c(0,200), expand = c(0,0)) +
+    scale_alpha_manual(guide = 'none') +
+  facet_wrap2(~facet_label, nrow = 1, strip = strip_themed(text_x = texts), strip.position = "top") +
+    theme_void() +
+  ggtitle("PWHL inaugural regular season:\nWhere on the ice did teams score from?\n") +
+    theme(
+          legend.position = "bottom",
+          legend.title=element_blank(),
+          plot.background = element_rect(fill = "#FFFFFF", color = "#FFFFFF"),
+          plot.margin = unit(c(.25,.25,.25,.25), "cm"),
+          legend.text = element_text(size = 7),
+          legend.spacing.x = unit(.05, 'cm'),
+        plot.title = element_text(hjust = 0.5, margin=margin(5,0,2,0)),
+        strip.text = element_text(size = 7, margin=margin(0,0,2,0)),
+        plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        panel.background = element_blank(),
+        plot.caption.position = "plot",
+        panel.spacing = unit(.75, "lines")) +
+  guides(color = guide_legend(nrow = 1)) 
+
+p_gf +
+  labs(caption = paste0("Data source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam")) + 
+    inset_element(pwhl_logo, left = .9, bottom = .00, right = 1, top = .10, align_to = "full")
+
+# ggsave(here(paste0("visualizations/goals_scored_by_team_spread", col_scheme, "_colours.png")), width = 2000, height = 1150, units = "px")
+
 
 ```
 
@@ -312,69 +446,1267 @@ ggsave(here(paste0("visualizations/goals_scored_by_team_", col_scheme, "_colours
 
 library(ggpubr)
 
-# read any image from computer for background
-rink = png::readPNG(here("data/rinklight.png"))
 
-goals_against <- game_plays %>%
-  filter(event == "goal") %>%
-  left_join(pwhl_teams() %>% 
-              select(team_id, team_label, team_code) %>%
-              mutate(team_id = as.numeric(team_id))) %>%
-  select(game_id, event, team_id, team_label, team_code, player_id, player_name_first, player_name_last, player_position, x_coord, x_coord_original, y_coord, y_coord_original) %>%
-  left_join(games %>% select(game_id, home_team, away_team), by = "game_id") %>%
-  ungroup() %>%
-  mutate(goal_against = case_when(team_label == home_team ~ away_team,
-                                  team_label == away_team ~ home_team),
-         x_coord = case_when(is.na(x_coord_original) ~ x_coord,
-                             TRUE ~ x_coord_original),
-         y_coord = case_when(is.na(y_coord_original) ~ y_coord,
-                             TRUE ~ y_coord_original))  %>%
-  group_by(goal_against) %>%
-  mutate(num_goals_against = n(),
-         facet_label = paste(goal_against, "-", num_goals_against, "goals against")) %>%
-  ungroup()
-
-goals_against %>%
-  ggplot(aes(x = x_coord, y = y_coord, color = goal_against)) +
-  background_image(rink) +
-  geom_point(size = 2, alpha = .8, stroke = NA) +
-  scale_color_manual(values = team_colours) +
-  labs(color = "Team") +
-  theme_void() +
-  ggtitle("Where on the ice do teams get scored on?") +
-  theme(legend.position = "bottom",
-        legend.title=element_blank(),
-        plot.background = element_rect(fill = "#FFFFFF"),
-          plot.margin = unit(c(.25,.25,.25,.25), "cm"),
-        legend.text = element_text(size = 7),
-        legend.spacing.x = unit(.05, 'cm'),
-        plot.title = element_text(hjust = 0.5)) +
-  guides(color = guide_legend(nrow = 1))
-
-ggsave(here(paste0("visualizations/goals_scored_against", col_scheme, "_colours.png")), width = 1200, height = 725, units = "px")
 
 texts <- list(element_text(colour = team_colours[[1]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[2]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[3]], face = "bold"),element_text(colour = team_colours[[4]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[5]], face = "bold"), element_text(colour = team_colours[[6]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")))
 
-goals_against %>%
-    ggplot(aes(x = x_coord, y = y_coord, color = goal_against)) +
+goalplot_colors <- setNames(c(team_colours, "#FFC200"), c(names(team_colours), "Empty Net"))
+
+empty_netters <- goals %>%
+  mutate(team_label = ifelse(where_goal == "home goal", away_team, home_team),
+         who_scored = ifelse(where_goal == "home goal", home_team, away_team)) %>%
+  group_by(team_label) %>%
+  mutate(num_goals_against = n(),
+         facet_label = paste("–", team_label, "–", "\n", num_goals_against, "goals against")) %>%
+  ungroup() %>%
+  mutate(team_label = case_when(empty_net == 1 ~ "Empty Net",
+                                TRUE ~ team_label),
+         who_scored = case_when(empty_net == 1 ~ "Empty Net",
+                                TRUE ~ who_scored)) %>%
+  filter(empty_net == 1)
+
+p_ga <- goals %>%
+  mutate(team_label = ifelse(where_goal == "home goal", away_team, home_team),
+         who_scored = ifelse(where_goal == "home goal", home_team, away_team)) %>%
+  group_by(team_label) %>%
+  mutate(num_goals_against = n(),
+         facet_label = paste("–", team_label, "–", "\n", num_goals_against, "goals against")) %>%
+  ungroup() %>%
+    ggplot(aes(x = x_for_vis, y = y_for_vis, fill = who_scored)) +
     background_image(rink) +
-    geom_point(size = 1.75, alpha = .65, stroke = NA) +
-    scale_color_manual(values = team_colours) +
+    geom_point(size = 1.5, shape = 21, alpha = .5, stroke = NA) +
+  geom_point(size = 2.15, shape = 1, alpha = .5,  aes(color = team_label), data = empty_netters) +
+  #geom_text(aes(label = paste(player_name_last, game_id))) +
+    scale_fill_manual(values = goalplot_colors, guide = "none") +
+  scale_color_manual(values = "#FFC200", breaks = "Empty Net") +
+    scale_x_continuous(limits = c(0,85), expand = c(0,0)) +
+    scale_y_continuous(limits = c(0,200), expand = c(0,0)) +
+    scale_alpha_manual(guide = 'none') +
     labs(color = "Team",
-         caption = "Data source: fastRhockey R package, 2024-03-15\nCreated by Hilary Killam") + 
-  facet_wrap2(~facet_label, nrow = 3, strip = strip_themed(text_x = texts)) +
+         caption = paste0("Data source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam")) + 
+  facet_wrap2(~facet_label, nrow = 1, strip = strip_themed(text_x = texts), strip.position = "top") +
     theme_void() +
-  ggtitle("Where on the ice do teams get scored on?") +
-    theme(legend.position = "none",
-          legend.title = element_blank(),
-          plot.background = element_rect(fill = "#FFFFFF"),
+  ggtitle("Where on the ice did  teams get scored on?\n") +
+    theme(
+          legend.position = "bottom",
+          legend.title=element_blank(),
+          plot.background = element_rect(fill = "#FFFFFF", color = "#FFFFFF"),
           plot.margin = unit(c(.25,.25,.25,.25), "cm"),
           legend.text = element_text(size = 7),
           legend.spacing.x = unit(.05, 'cm'),
-          plot.title = element_text(hjust = 0.5),
-          strip.text = element_text(size = 8),
-        plot.caption = element_text(color = "#555555", size = 6))
+        plot.title = element_text(hjust = 0.5, margin=margin(5,0,2,0)),
+        strip.text = element_text(size = 7, margin=margin(0,0,2,0)),
+        plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        panel.background = element_blank(),
+        plot.caption.position = "plot",
+        panel.spacing = unit(.75, "lines")) +
+  guides(color = guide_legend(nrow = 1)) + 
+    inset_element(pwhl_logo, left = .9, bottom = .00, right = 1, top = .10, align_to = "full")
 
-ggsave(here(paste0("visualizations/goals_scored_against_team_", col_scheme, "_colours.png")), width = 1500, height = 1350, units = "px")
+# ggsave(here(paste0("visualizations/goals_scored_against_team_spread", col_scheme, "_colours.png")), width = 2000, height = 1150, units = "px")
+
+
+p_gf / p_ga
+
+ggsave(here(paste0("visualizations/goals_scored", col_scheme, "_colours.png")), width = 2000, height = 2250, units = "px")
 
 ```
+
+#Penalty minutes over time - step
+
+```{r}
+#calculate penalty length for each player since the stats function isn't working
+all_player_names <- pwhl_team_roster("Boston") %>%
+  bind_rows(pwhl_team_roster("Minnesota")) %>%
+  bind_rows(pwhl_team_roster("Montreal")) %>%
+  bind_rows(pwhl_team_roster("New York")) %>%
+  bind_rows(pwhl_team_roster("Ottawa")) %>%
+  bind_rows(pwhl_team_roster("Toronto")) %>%
+  bind_rows(tibble(first_name = "Jamie Lee", last_name = "Rattray")) %>% #Rattray is missing for some reason
+  mutate(last_name = case_when(player_id == 20 ~ "Coyne Schofield", 
+                               TRUE ~ last_name)) %>%
+  distinct(first_name, last_name) %>%
+  group_by(last_name) %>%
+  mutate(needs_initial = ifelse(n() > 1, "yes", "no")) %>%
+  ungroup() %>%
+  select(player_name_first = first_name, player_name_last = last_name, needs_initial) 
+
+penalties <- game_plays %>% 
+  left_join(games %>% select(game_id, home_team, away_team)) %>%
+  left_join(pwhl_teams() %>% 
+              select(team_id, team_label, team_code) %>%
+              mutate(team_id = as.numeric(team_id))) %>% 
+  filter(event == "penalty" | (event == "goal" & (short_handed == 1 | power_play == 1))) %>% 
+  mutate(actual_pentaly_length = ifelse(lead(event) == "goal", 
+                                        lead(sec_from_start) - sec_from_start, penalty_length*60),
+         player_name_first = ifelse(is.na(player_two_name_first), player_name_first, player_two_name_first),
+         player_name_last = ifelse(is.na(player_two_name_last), player_name_last, player_two_name_last)) %>% 
+  select(game_id, team_label, event, period_of_game, time_of_period, player_name_first, player_name_last, player_position, event_type, penalty_length, actual_pentaly_length, clock, sec_from_start) %>%
+  filter(event == "penalty") %>%
+  mutate(player_name_first_initial = str_extract_all(player_name_first, "[:upper:]", simplify = T)[,1],
+         player_name_second_initial = str_extract_all(player_name_first, "[:upper:]", simplify = T)[,2]) %>%
+  mutate(player_name_first_initial = paste0(player_name_first_initial, "."),
+         player_name_second_initial = ifelse(player_name_second_initial == "", NA_character_, paste0(player_name_second_initial, "."))) %>%
+         unite(., "player_name_initials", player_name_first_initial, player_name_second_initial, na.rm =T, sep = "") %>%
+  left_join(all_player_names) %>%
+  mutate(player_name_full = ifelse(needs_initial == "yes", paste(player_name_initials, player_name_last), player_name_last)) %>%
+  distinct()
+
+penalties_by_player <- penalties %>% 
+  group_by(team_label, player_name_full) %>% 
+  summarize(penalty_minutes = sum(penalty_length)) %>%
+  arrange(desc(penalty_minutes))
+
+games_by_team <- games %>% 
+  select(game_id, home_team, away_team, game_date) %>% 
+  mutate(game_date = lubridate::ymd(paste0("2024-", str_sub(game_date, 6)))) %>%
+  pivot_longer(c(home_team, away_team), names_to = "team_location", values_to = "team_label") %>% 
+  group_by(team_label) %>% 
+  mutate(game_num_for_team = row_number()) %>% 
+  ungroup()
+
+penalties_by_team_by_game <- penalties %>% 
+  left_join(games_by_team, by = c("team_label", "game_id")) %>%
+  group_by(team_label, game_num_for_team, game_date) %>% 
+  summarize(penalty_minutes = sum(penalty_length)) %>%
+  arrange(team_label, game_num_for_team) %>%
+  group_by(team_label) %>%
+  mutate(running_penalty_minutes = cumsum(penalty_minutes)) %>%
+  ungroup()
+
+add_zeros <- tibble(team_label = unique(goals$team_label),
+                    game_num_for_team = 0, 
+                    running_penalty_minutes = 0)
+
+add_zeros %>%
+  bind_rows(penalties_by_team_by_game) %>%
+  ggplot(aes(x = jitter(game_num_for_team, .5), y = jitter(running_penalty_minutes, .5), colour = team_label)) +
+  geom_step(size = 1, alpha = .75) +
+  scale_color_manual(values = team_colours) +
+  theme_void() +
+  scale_x_continuous(breaks = c(1:max(games_by_team$game_num_for_team))) +
+  scale_y_continuous(breaks = scales::breaks_pretty(n = 10)) +
+  labs(x = "Game number") +
+  labs(y = "Penalty minutes - running total") +
+  theme(axis.text.x = element_text(),
+        axis.title.x = element_text(),
+        axis.text.y = element_text(),
+        axis.title.y = element_text(angle = 90))
+
+texts <- list(element_text(colour = team_colours[[1]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[2]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[3]], face = "bold"),element_text(colour = team_colours[[4]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = team_colours[[5]], face = "bold"), element_text(colour = team_colours[[6]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")))
+
+penalties_by_team_by_game %>%
+  group_by(team_label) %>%
+  mutate(facet_label = paste("–", team_label, "–\n", max(running_penalty_minutes), "total penalty minutes")) %>%
+  ungroup() %>%
+  ggplot(aes(x = game_num_for_team, y = penalty_minutes, fill = team_label)) +
+  geom_col() +
+  geom_smooth(method = "lm", se = F, color = "#333333", linetype = "dotted", size = .5) +
+  facet_wrap2(~facet_label, strip = strip_themed(text_x = texts)) +
+  scale_fill_manual(values = team_colours) +
+  scale_x_continuous(limits = c(1, 25), breaks = c(1, 3, 6, 9, 12, 15, 18, 21, 24)) +
+  scale_y_continuous(breaks = scales::breaks_pretty(n = 8)) +
+  labs(title = "PWHL inaugural season:\nDid teams take more penalties as the season went on?\n",
+       x = "Game number", 
+       y = "Penalty minutes",
+       caption = paste0("Data source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam")) +
+  theme_void() +
+  theme(axis.text.x = element_text(size = 5),
+        axis.title.x = element_text(margin=margin(5,0,0,0)),
+        axis.text.y = element_text(size = 7, margin=margin(5,0,2,0)),
+        axis.title.y = element_text(angle = 90, margin=margin(0,5,0,0)),
+        plot.title = element_text(hjust = 0.5, margin=margin(0,0,5,0)),
+        strip.text = element_text(size = 8, margin=margin(2,0,0,0)),
+        legend.position = "none",
+        legend.title = element_blank(),
+        plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        plot.caption.position = "plot",
+        panel.grid.major.y = element_line(color = "#e9e9e9", size = .1)) + 
+    inset_element(pwhl_logo, left = .95, bottom = .01, right = .99, top = .08, align_to = "full")
+
+
+ggsave(here(paste0("visualizations/penalties_by_game_", col_scheme, "_colours.png")), width = 2000, height = 1500, units = "px")
+
+```
+
+#Penalty minutes over time - bar
+
+```{r}
+penalties_by_player %>%
+  group_by(player_name_full) %>%
+  mutate(total_penalty_minutes = sum(penalty_minutes)) %>%
+  ungroup() %>%
+  arrange(desc(total_penalty_minutes)) %>%
+  filter(total_penalty_minutes > 6) %>% 
+  mutate(player_name_full = fct_inorder(player_name_full)) %>%
+  ggplot(aes(x = player_name_full, y = penalty_minutes, fill = team_label)) +
+  geom_col() +
+  scale_fill_manual(values = team_colours) +
+ guides(fill = guide_legend(nrow = 1)) +
+  labs(x = "Player", 
+       y = "Penalty Minutes",
+       title = "Players with the most penalty minutes") +
+  theme_void() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 8),
+        axis.title.x = element_text(),
+        axis.text.y = element_text(),
+        axis.title.y = element_text(angle = 90),
+        legend.position = "bottom",
+        legend.title = element_blank())
+
+team_total_penalty_mins <- penalties_by_team_by_game %>% 
+  group_by(team_label) %>%
+  filter(running_penalty_minutes == max(running_penalty_minutes)) %>%
+  select(team_label, team_total = running_penalty_minutes) %>%
+  arrange(desc(team_total))
+
+graph_order_colors <- team_total_penalty_mins %>%
+  left_join(tibble(team_label = names(team_colours), colour = team_colours))
+
+texts <- list(element_text(colour = graph_order_colors$colour[[1]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = graph_order_colors$colour[[2]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = graph_order_colors$colour[[3]], face = "bold"),element_text(colour = graph_order_colors$colour[[4]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")), element_text(colour = graph_order_colors$colour[[5]], face = "bold"), element_text(colour = graph_order_colors$colour[[6]], face = "bold", margin = unit(c(.075,.075,.075,.075), "cm")))
+
+penalties_by_player %>%
+  #make shaded areas for players who were traded and have penalty minutes spanning multiple teams by duplicating rows
+  group_by(player_name_full) %>% 
+  mutate(n_teams = n_distinct(team_label)) %>%
+  filter(n_teams > 1) %>%
+  mutate(temp1 = min(team_label),
+         temp2 = max(team_label),
+         team_label = ifelse(team_label == temp1, temp2, temp1)) %>% #switch team labels so the grey areas appear on the right plot panels
+  select(-temp1, -temp2) %>%
+  ungroup() %>%
+  bind_rows(penalties_by_player) %>%
+  mutate(fill_fix = case_when(n_teams > 1 ~ " Penalty minutes from traded player's other team",
+                              TRUE ~ team_label)) %>%
+  group_by(player_name_full) %>%
+  mutate(n_teams = ifelse(max(n_teams, na.rm = T) > 1, max(n_teams, na.rm = T), n_teams)) %>% 
+  mutate(total_penalty_minutes = case_when(n_teams >1 ~ sum(penalty_minutes)/2,
+                                           TRUE ~ sum(penalty_minutes))) %>%
+  ungroup() %>%
+  arrange(desc(total_penalty_minutes)) %>% 
+  mutate(player_name_full = fct_inorder(player_name_full)) %>%
+  left_join(team_total_penalty_mins, by = "team_label") %>%
+  mutate(facet_label = paste("–", team_label, "–", "\n", team_total, "penalty minutes")) %>%
+  arrange(desc(team_total)) %>%
+  mutate(facet_label = fct_inorder(facet_label)) %>%
+  ggplot(aes(x = player_name_full, y = penalty_minutes, fill = fill_fix)) +
+  geom_col() +
+  scale_fill_manual(values = c(" Penalty minutes from traded player's other team"="#e1e1e1", team_colours), breaks = " Penalty minutes from traded player's other team") +
+  scale_y_continuous(breaks = scales::breaks_pretty(n = 8)) +
+  guides(x = guide_axis(angle = 90)) +
+  labs(title = "PWHL inaugural season:\nWho were the most penalized teams and players?\n",
+       x = "Player name", 
+       y = "Penalty minutes",
+       caption = paste0("Data source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam")) +
+  facet_wrap2(~facet_label, scales = "free_x", strip = strip_themed(text_x = texts)) +
+  theme_void() +
+  theme(axis.text.x = element_text(hjust = 1, size = 6),
+        axis.title.x = element_text(margin=margin(5,0,0,0)),
+        axis.text.y = element_text(size = 7, margin=margin(5,0,2,0)),
+        axis.title.y = element_text(angle = 90, margin=margin(0,5,0,0)),
+        plot.title = element_text(hjust = 0.5, margin=margin(0,0,5,0)),
+        strip.text = element_text(size = 8, margin=margin(2,0,0,0)),
+        panel.grid.major.y = element_line(color = "#e9e9e9", size = .1),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        plot.caption.position = "plot") + 
+    inset_element(pwhl_logo, left = .9, bottom = .00, right = 1, top = .10, align_to = "full")
+
+ggsave(here(paste0("visualizations/penalties_by_team_", col_scheme, "_colours.png")), width = 2000, height = 1750, units = "px")
+
+```
+
+#Toronto's win streak
+
+```{r}
+
+streaks <- games %>% 
+  filter(home_score != "-") %>%
+  mutate(game_date = lubridate::ymd(paste0("2024-", str_sub(game_date, 6)))) %>%
+  pivot_longer(c(home_team, away_team), names_to = "team_location", values_to = "team_label") %>% 
+  group_by(team_label) %>% 
+  mutate(game_num_for_team = row_number()) %>% 
+  ungroup() %>%
+  mutate(game_won = ifelse(team_label == winner, 1, 0)) %>%
+  group_by(team_label) %>% 
+  mutate(team_streak_id = data.table::rleid(game_won)) %>%
+  ungroup() %>%
+  mutate(streak_type = ifelse(game_won == 1, "win_streak", "loss_streak")) %>%
+  group_by(team_label, team_streak_id) %>%
+  mutate(streak_length = n()) %>%
+  ungroup()
+  
+tor_streak_dates <- streaks %>%
+  filter(streak_length == 11) %>%
+  filter(game_date == min(game_date) | game_date == max(game_date)) %>%
+  select(game_date)
+
+tor_streak <- streaks %>%
+  filter(team_label == "Toronto") %>%
+  mutate(season_division = case_when(streak_length == 11 ~ "win_streak",
+                                     game_date < min(tor_streak_dates$game_date) ~ "pre_win_streak",
+                                     TRUE ~ "post_win_streak"))
+
+```
+
+#Goals and Assists over time
+
+```{r}
+
+player_stats <- read_csv(here("data/player_stats.csv")) %>%
+  mutate(toi = as.character(toi),
+         starting = as.character(starting))
+
+missing_games <- games_played_ids[games_played_ids %notin% player_stats$game_id]
+
+for(i in 1:length(missing_games)) {
+  game <- missing_games[[i]]
+  temp <- pwhl_player_box(game)$skaters %>%
+    mutate(player_id = as.numeric(player_id)) 
+  player_stats <- player_stats %>%
+    bind_rows(temp)
+}
+
+if (length(missing_games)  > 0) {
+player_stats %>% write_csv(here("data/player_stats.csv")) 
+}
+
+
+game_num_for_player <- player_stats %>%
+  select(player_id, player_name_first = first_name, player_name_last = last_name, game_id, position, team_id) %>%
+  left_join(games %>% select(game_id, game_date)) %>%
+  mutate(player_name_first_initial = str_extract_all(player_name_first, "[:upper:]", simplify = T)[,1],
+         player_name_second_initial = str_extract_all(player_name_first, "[:upper:]", simplify = T)[,2]) %>%
+  mutate(player_name_first_initial = paste0(player_name_first_initial, "."),
+         player_name_second_initial = ifelse(player_name_second_initial == "", NA_character_, paste0(player_name_second_initial, "."))) %>%
+         unite(., "player_name_initials", player_name_first_initial, player_name_second_initial, na.rm =T, sep = "") %>%
+ left_join(all_player_names) %>%
+  mutate(player_name_full = ifelse(needs_initial == "yes", paste(player_name_initials, player_name_last), player_name_last)) %>%
+  group_by(player_name_full) %>%
+  mutate(game_num_for_player = row_number()) %>%
+  ungroup() %>%
+  left_join(teams_ids) %>%
+  select(game_id, game_date, player_name_full, team_label, game_num_for_player)
+
+goals_assists_by_player_by_game <- goals %>% 
+  left_join(game_plays %>% select(game_id, time_of_period, event, player_two_name_first, player_two_name_last, player_three_name_first, player_three_name_last)) %>% 
+  mutate(goals_id = row_number()) %>%
+  rename(goals__player_name_first = player_name_first,
+         goals__player_name_last = player_name_last,
+         assists1__player_name_first = player_two_name_first,
+         assists1__player_name_last = player_two_name_last,
+         assists2__player_name_first = player_three_name_first,
+         assists2__player_name_last = player_three_name_last) %>% 
+  pivot_longer(contains("player_name"), 
+               names_to = c("contribution", ".value"), 
+               names_sep="__" ) %>%
+  filter(!is.na(player_name_last)) %>% 
+  mutate(player_name_first_initial = str_extract_all(player_name_first, "[:upper:]", simplify = T)[,1],
+         player_name_second_initial = str_extract_all(player_name_first, "[:upper:]", simplify = T)[,2]) %>%
+  mutate(player_name_first_initial = paste0(player_name_first_initial, "."),
+         player_name_second_initial = ifelse(player_name_second_initial == "", NA_character_, paste0(player_name_second_initial, "."))) %>%
+         unite(., "player_name_initials", player_name_first_initial, player_name_second_initial, na.rm =T, sep = "") %>%
+ left_join(all_player_names) %>%
+  mutate(player_name_full = ifelse(needs_initial == "yes", paste(player_name_initials, player_name_last), player_name_last),
+         contribution = case_when(str_detect(contribution, "assist") ~ "assists",
+                                  TRUE ~ contribution)) %>%
+  group_by(player_name_full, contribution, game_id) %>% 
+  summarize(n_player_game = n()) %>% 
+  ungroup() %>%
+  pivot_wider(names_from = "contribution", values_from = "n_player_game") %>% 
+  arrange(desc(goals)) %>% 
+  mutate(across(where(is.numeric), ~ replace_na(., 0))) %>%
+  full_join(games %>% filter(!is.na(home_score)) %>% select(game_id, game_date)) %>% 
+  ungroup() %>%
+  pivot_longer(c("goals", "assists"), names_to = "contribution", values_to = "n" ) %>%
+  full_join(game_num_for_player) %>%
+  complete(nesting(player_name_full, game_id, game_num_for_player, game_date, team_label), contribution, fill = list(n = 0, cumulative = 0)) %>%
+  filter(!is.na(contribution)) %>%
+  group_by(player_name_full, contribution) %>%
+  arrange(game_date) %>%
+  mutate(cumulative = cumsum(n)) %>%
+  ungroup() %>%
+  arrange(player_name_full, contribution, game_num_for_player) %>%
+  left_join(team_colours_tibble)
+
+player_goals_plots <- goals_assists_by_player_by_game %>%
+  filter(player_name_full %notin% c("Campbell", "Hensley", "Maschmeyer")) %>%
+  group_by(player_name_full) %>%
+  mutate(current_team = case_when(game_num_for_player == max(game_num_for_player) ~ team_label),
+         current_team_colour = case_when(game_num_for_player == max(game_num_for_player) ~ colour),
+         max_goals = case_when(game_num_for_player == max(game_num_for_player) & contribution == "goals" ~ cumulative)) %>%
+  fill(current_team, .direction = "up") %>%
+  fill(current_team_colour, .direction = "up") %>%
+  fill(max_goals, .direction = "up") %>%
+  group_by(player_name_full, contribution) %>%
+  mutate(total_text = case_when(game_num_for_player == max(game_num_for_player) ~ paste(" ", cumulative, contribution),
+                                TRUE ~ "")) %>%
+  ungroup() %>%
+  mutate(grouper = player_name_full,
+         grouper_team = current_team,
+         grouper_colour = current_team_colour,
+         plot_colour = case_when(contribution == "goals" ~ "#aa008e",
+                         TRUE ~ "#ffcd3a"),
+         cumulative = case_when(contribution == "goals" ~ cumulative +.05,
+                                TRUE ~ cumulative -.05)) %>%
+  group_by(grouper_team, grouper_colour, grouper, max_goals) %>%
+  nest() %>%
+  mutate(plot=map(data, function(.x) {.x  %>%
+      ggplot(aes(x = game_num_for_player, y = cumulative, color = plot_colour)) + 
+        geom_step(size = 1, alpha = .9) +
+      geom_text(aes(label = total_text), hjust = 0) +
+        scale_color_identity() +
+        scale_x_continuous(limits = c(0, 26), breaks = c(1, 5, 10, 15, 20, 24)) +
+      scale_y_continuous(limits = c(-0.1, 21), breaks = c(5, 10, 15, 20)) +
+        theme_void() +
+        labs(title = paste(.x$player_name_full),
+             x = "Game number for player",
+             y = "Number of goals/assists") +
+      theme(plot.title = element_text(color = .x$current_team_colour, size = 18),
+            panel.grid.major.y = element_line(color = "#EFEFEF"),
+            axis.text.x = element_text(),
+            axis.title.x = element_text(margin = unit(c(.15, 0, 0, 0), "cm")),
+            axis.text.y = element_text(),
+            axis.title.y = element_text(angle = 90, margin = unit(c(0, .15, 0, 0), "cm")))
+  }))
+
+alpha_levels <- tibble(max_goals = 0:20,
+                       alpha_level = c(.1, .2, .2, .3, .3, .4, .4, .4, .5, .5, .6, .6, .6, .7, .7, .7, .8, .8, .9, .9, 1))
+
+player_goals_plots <- goals_assists_by_player_by_game %>%
+  filter(player_name_full %notin% c("Campbell", "Hensley", "Maschmeyer")) %>%
+  #filter(player_name_full %in% c("Spooner", "Nurse", "Maltais")) %>% 
+  filter(contribution == "goals") %>%
+    group_by(player_name_full) %>%
+    mutate(current_team = case_when(game_num_for_player == max(game_num_for_player) ~ team_label),
+           current_team_colour = case_when(game_num_for_player == max(game_num_for_player) ~ colour),
+           max_goals = case_when(game_num_for_player == max(game_num_for_player) & contribution == "goals" ~ cumulative)) %>%
+    fill(current_team, .direction = "up") %>%
+    fill(current_team_colour, .direction = "up") %>%
+    fill(max_goals, .direction = "up") %>%
+    group_by(player_name_full, contribution) %>%
+    mutate(total_text = case_when(game_num_for_player == max(game_num_for_player) ~ paste(" ", player_name_full, "-", cumulative, contribution),
+                                  TRUE ~ "")) %>%
+    ungroup() %>%
+    mutate(grouper = player_name_full,
+           grouper_team = current_team,
+           grouper_colour = current_team_colour,
+           plot_colour = case_when(contribution == "goals" ~ "#aa008e",
+                                   TRUE ~ "#ffcd3a"),
+           cumulative = case_when(contribution == "goals" ~ cumulative +.05,
+                                  TRUE ~ cumulative -.05)) %>%
+  left_join(alpha_levels) %>%
+    group_by(grouper_team, grouper_colour) %>%
+    nest() %>%
+    mutate(plot=map(data, function(.x) {.x  %>%
+            ggplot(aes(x = game_num_for_player, y = cumulative, color = current_team_colour, alpha = alpha_level)) + 
+            geom_step(size = 1, group = .x$player_name_full) +
+            #geom_text(aes(label = total_text), hjust = 0) +
+        ggrepel::geom_text_repel(aes(label = total_text), 
+                                 hjust = 0,
+                  direction = "y") +
+            scale_color_identity() + 
+           scale_alpha_identity() +
+            scale_x_continuous(limits = c(0, 30), breaks = c(1, 5, 10, 15, 20, 24)) +
+            scale_y_continuous(limits = c(-0.1, 21), breaks = c(5, 10, 15, 20)) +
+            theme_void() +
+        labs(title = paste(.x$current_team),
+             x = "Game number for player",
+             y = "Number of goals/assists") +
+      theme(plot.title = element_text(color = .x$current_team_colour, size = 18),
+            panel.grid.major.y = element_line(color = "#EFEFEF"),
+            axis.text.x = element_text(),
+            axis.title.x = element_text(margin = unit(c(.15, 0, 0, 0), "cm")),
+            axis.text.y = element_text(),
+            axis.title.y = element_text(angle = 90, margin = unit(c(0, .15, 0, 0), "cm")))
+      
+      }))
+
+#make a function that will plop the plots on top of each other
+plot_a_list <- function(master_list_with_plots, no_of_cols) {
+
+  patchwork::wrap_plots(master_list_with_plots, 
+                        ncol = no_of_cols)
+}
+
+for (team in unique(player_goals_plots$grouper_team)) {
+  plots <- player_goals_plots %>%
+    filter(grouper_team == team) %>%
+    arrange(desc(max_goals)) %>%
+    pull(plot)
+  team_colour <- unique(player_goals_plots$grouper_colour[player_goals_plots$grouper_team == team])
+  plot_a_list(plots, 5) +
+    plot_annotation(title = paste(team, "- goals and assists"),
+                    theme = theme(plot.title = element_text(size = 24, color = team_colour))) 
+}
+  
+  
+player_goals_plots$plot
+
+```
+
+#When goals are scored during a period
+
+```{r}
+
+team_labels_clrs <- glue::glue_data(
+  tibble(team = rev(names(team_colours)),
+         clr = rev(team_colours)), 
+  "<span style='font-weight:bold; size:5; ;color: {clr}'>{team}</span>"
+  )
+
+goalplot_colors <- setNames(c(team_colours, "#FFC200"), c(names(team_colours), "Empty Net"))
+
+#set different scale options for the facets
+plot_scales <- list(
+  scale_x_continuous(limits = c(0, 20), breaks = c(0, 5, 10, 15, 20), labels = c("0:00", "5:00", "10:00", "15:00", "20:00")),
+  scale_x_continuous(limits = c(0, 20), breaks = c(0, 5, 10, 15, 20), labels = c("0:00", "5:00", "10:00", "15:00", "20:00")),
+  scale_x_continuous(limits = c(0, 20), breaks = c(0, 5, 10, 15, 20), labels = c("0:00", "5:00", "10:00", "15:00", "20:00")),
+  scale_x_continuous(limits = c(0, 5), breaks = c(0, 5), labels = c("0:00", "5:00"))
+  )
+            
+team_colours_tibble <- tibble(team_label = names(team_colours),
+                              colour = team_colours)
+
+goals %>%
+  mutate(period_label = case_when(period_of_game == 1 ~ "1st Period",
+                                  period_of_game == 2 ~ "2nd Period",
+                                  period_of_game == 3 ~ "3rd Period",
+                                  period_of_game == 4 ~ "OT"),
+         period_label = factor(period_label, levels = c("1st Period", "2nd Period", "3rd Period", "OT")),
+         goal_time = as.POSIXct(strptime(time_of_period, format="%M:%S")),
+         goal_time_mins = parse_number(time_of_period),
+         goal_time_secs = as.numeric(str_extract(time_of_period, "(?<=:)\\d\\d")),
+         goal_time_decimal = goal_time_mins + goal_time_secs/60,
+         team_labeller = case_when(empty_net == 1 ~ "Empty Net",
+                                TRUE ~ team_label)) %>%
+  ggplot(aes(x = goal_time_decimal, y = fct_rev(team_label), color = team_labeller)) +
+  geom_jitter(height = .0, alpha = .5, shape = 19, size = 3, stroke = NA) +
+  scale_color_manual(values = goalplot_colors, breaks = "Empty Net") +
+  facet_grid(. ~period_label, scales = "free", space = "free") +
+  labs(x = "Time of Goal") +
+  theme_minimal()+
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.text.y = element_markdown(),
+        axis.text.x = element_text(),
+        axis.title.y = element_blank(),
+        panel.grid = element_blank(),
+        strip.text = element_text(color = "#682f70"),
+        strip.background = element_rect(fill = "#f0e6f2", color = NA),
+        panel.background=element_rect(fill="#F9F9F9", color = NA)) + 
+  scale_y_discrete(labels=team_labels_clrs) +
+  facetted_pos_scales(x = plot_scales) +
+  guides(color = guide_legend(nrow = 1))
+
+hist_list <- goals %>%
+  filter(empty_net == 0) %>%
+  mutate(period_label = case_when(period_of_game == 1 ~ "1st Period",
+                                  period_of_game == 2 ~ "2nd Period",
+                                  period_of_game == 3 ~ "3rd Period",
+                                  period_of_game == 4 ~ "OT"),
+         period_label = factor(period_label, levels = c("1st Period", "2nd Period", "3rd Period", "OT")),
+         goal_time = as.POSIXct(strptime(time_of_period, format="%M:%S")),
+         goal_time_mins = parse_number(time_of_period),
+         goal_time_secs = as.numeric(str_extract(time_of_period, "(?<=:)\\d\\d")),
+         goal_time_decimal = goal_time_mins + goal_time_secs/60,
+         goal_time_binned = case_when(
+           goal_time_decimal <=2.5 ~ 1.25,
+           goal_time_decimal <=5 ~ 3.75,
+           goal_time_decimal <=7.5 ~ 6.25,
+           goal_time_decimal <=10 ~ 8.75,
+           goal_time_decimal <=12.5 ~ 11.25,
+           goal_time_decimal <=15 ~ 13.75,
+           goal_time_decimal <=17.5 ~ 16.25,
+           goal_time_decimal <=20 ~ 18.75)) %>%
+  count(team_label, period_label, goal_time_binned) %>%
+  left_join(team_colours_tibble) %>%
+  mutate(grouper = team_label,
+         period_label = factor(period_label, levels = c("1st Period", "2nd Period", "3rd Period", "OT"))) %>%
+  group_by(grouper) %>%
+  nest() %>%
+   mutate(plot = map(
+    data,
+  ~ggplot(.x, aes(x = goal_time_binned, y = n, fill = team_label)) +
+  geom_col() +
+  scale_fill_manual(values = goalplot_colors) +
+  facet_grid(.~period_label, scales = "free", space = "free", drop = FALSE) +
+  labs(x = "Time of Goal", y = .x$team_label) +
+  theme_minimal()+
+  theme(legend.position = "none",
+        legend.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(angle = 0, color = .x$colour, vjust = .5, face = "bold"),
+        panel.grid = element_blank(),
+        strip.text = element_blank(),
+        strip.background = element_blank(),
+        panel.background=element_rect(fill="#F9F9F9", color = NA),
+        panel.spacing = unit(1, "lines")) + 
+  #scale_y_discrete(labels=team_labels_clrs) +
+  scale_y_continuous(limits = c(0, 7)) +
+  facetted_pos_scales(x = plot_scales) +
+  guides(color = guide_legend(nrow = 1))
+   ))
+
+hist_list$plot[[1]] <- hist_list$plot[[1]] +
+  theme(strip.text = element_text(color = "#555555", margin = unit(c(.15, 0, .15, 0), "cm")),
+        strip.background = element_rect(fill = "#EEEEEE", color = NA))
+
+hist_list$plot[[6]] <- hist_list$plot[[6]] +
+  theme(axis.title.x = element_text(margin = unit(c(.15, 0, 0, 0), "cm")),
+        axis.text.x = element_text(size = 7, family = "mono", face = "bold"))
+
+#make a function that will plop the plots on top of each other
+plot_a_list <- function(master_list_with_plots, no_of_cols) {
+
+  patchwork::wrap_plots(master_list_with_plots, 
+                        ncol = no_of_cols)
+}
+
+plot_a_list(hist_list$plot, 1) + 
+  labs(caption = paste0("Data source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam")) + 
+    inset_element(pwhl_logo, left = .95, bottom = .00, right = 1, top = .25, align_to = "full") +
+  plot_annotation(
+  title = 'When did teams score most of their goals?') & 
+  theme(plot.title = element_text(hjust = .5),
+        plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        plot.caption.position = "plot")
+# 
+# ggsave(here(paste0("visualizations/when_goals_scored_histogram", col_scheme, "_colours.png")), width = 2250, height = 1500, units = "px")
+
+#----------------------------------Same plot, but as density instead of histogram
+
+density_list <- goals %>%
+  filter(empty_net == 0) %>%
+  mutate(period_label = case_when(period_of_game == 1 ~ "1st Period",
+                                  period_of_game == 2 ~ "2nd Period",
+                                  period_of_game == 3 ~ "3rd Period",
+                                  period_of_game == 4 ~ "OT"),
+         period_label = factor(period_label, levels = c("1st Period", "2nd Period", "3rd Period", "OT")),
+         goal_time = as.POSIXct(strptime(time_of_period, format="%M:%S")),
+         goal_time_mins = parse_number(time_of_period),
+         goal_time_secs = as.numeric(str_extract(time_of_period, "(?<=:)\\d\\d")),
+         goal_time_decimal = goal_time_mins + goal_time_secs/60,
+         goal_time_binned = case_when(
+           goal_time_decimal <=2.5 ~ 1.25,
+           goal_time_decimal <=5 ~ 3.75,
+           goal_time_decimal <=7.5 ~ 6.25,
+           goal_time_decimal <=10 ~ 8.75,
+           goal_time_decimal <=12.5 ~ 11.25,
+           goal_time_decimal <=15 ~ 13.75,
+           goal_time_decimal <=17.5 ~ 16.25,
+           goal_time_decimal <=20 ~ 18.75)) %>%
+  left_join(team_colours_tibble) %>%
+  mutate(grouper = team_label,
+         period_label = factor(period_label, levels = c("1st Period", "2nd Period", "3rd Period", "OT"))) %>%
+  arrange(grouper) %>%
+  group_by(grouper) %>%
+  nest() %>%
+   mutate(plot = map(
+    data,
+  ~ggplot(.x, aes(x = goal_time_binned, y = after_stat(count), fill = team_label, color = team_label)) +
+  geom_density(bw = 1) +
+  scale_fill_manual(values = goalplot_colors) +
+  scale_color_manual(values = goalplot_colors) +
+  facet_grid(.~period_label, scales = "free", space = "free", drop = FALSE) +
+  labs(x = "Time of Goal", y = .x$team_label) +
+  theme_minimal()+
+  theme(legend.position = "none",
+        legend.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_text(angle = 0, color = .x$colour, vjust = .5, face = "bold"),
+        panel.grid = element_blank(),
+        strip.text = element_blank(),
+        strip.background = element_blank(),
+        panel.background=element_rect(fill="#F9F9F9", color = NA),
+        panel.spacing = unit(1, "lines")) + 
+  #scale_y_discrete(labels=team_labels_clrs) +
+  scale_y_continuous(limits = c(0, 3)) +
+  facetted_pos_scales(x = plot_scales) +
+  guides(color = guide_legend(nrow = 1))
+   ))
+
+
+density_list$plot[[1]] <- density_list$plot[[1]] +
+  theme(strip.text = element_text(color = "#555555", margin = unit(c(.15, 0, .15, 0), "cm")),
+        strip.background = element_rect(fill = "#EEEEEE", color = NA))
+
+density_list$plot[[6]] <- density_list$plot[[6]] +
+  theme(axis.title.x = element_text(margin = unit(c(.15, 0, 0, 0), "cm")),
+        axis.text.x = element_text(size = 7, family = "mono", face = "bold"))
+
+plot_a_list(density_list$plot, 1) + 
+  labs(caption = paste0("Data source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam")) + 
+    inset_element(pwhl_logo, left = .95, bottom = .00, right = 1, top = .25, align_to = "full") +
+  plot_annotation(
+  title = 'PWHL inaugural season:\nWhen did teams score most of their goals?') & 
+  theme(plot.title = element_text(hjust = .5),
+        plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        plot.caption.position = "plot")
+
+ggsave(here(paste0("visualizations/when_goals_scored_density", col_scheme, "_colours.png")), width = 2250, height = 1500, units = "px")
+
+```
+
+
+#Shot rate density
+
+```{r}
+
+
+teams_ids <- pwhl_teams() %>%
+  select(team_label, team_id) %>%
+  mutate(team_id = as.numeric(team_id))
+
+n_games_played <- games %>%
+  filter(game_played == T) %>%
+  nrow()
+
+#average shots per game
+# shots_pg <- tibble(game = numeric(),
+#                    shots = numeric())
+# 
+# for (i in 1:n_games_played) {
+#     game_id_num <- games$game_id[i]
+#     temp <- tibble(game = game_id_num,
+#                    shots = pwhl_pbp(game_id_num) %>% filter(event == "shot" & period_of_game < 4) %>% nrow())
+#     shots_pg <- shots_pg %>%
+#       bind_rows(temp)
+# }
+# 
+# shots_pg %>% write_csv(here("data/regulation_shots_per_game.csv"))
+# 
+# shots_pg %>% summarize(mean_shots_pg = mean(shots))
+
+#set different scale options for the facets
+
+for (i in 1:n_games_played) {
+  game_id_num <- games$game_id[i]
+  game_date <- paste(format(games$game_date[i], "%B %d, %Y"), "-", games$game_status[i])
+  date_for_file <- as.character(games$game_date[i])
+  win_team <- games$winner[i]
+  lose_team <- ifelse(games$home_team[i] == win_team, games$away_team[i], games$home_team[i])
+  win_color <- team_colours_tibble %>% filter(team_label == win_team) %>% pull(colour)
+  lose_color <- team_colours_tibble %>% filter(team_label == lose_team) %>% pull(colour)
+  win_score <- max(c(games$home_score[i], games$away_score[i]))
+  lose_score <- min(c(games$home_score[i], games$away_score[i]))
+  
+#plot data
+  p_data <- pwhl_pbp(game_id_num) %>% 
+    group_by(time_of_period, player_id) %>%
+    fill(power_play, .direction = "downup")  %>%
+    fill(short_handed, .direction = "downup") %>%
+    fill(empty_net, .direction = "downup") %>%
+    ungroup() %>%
+  filter(event == "shot") %>%
+  #filter(period_of_game < 4) %>%
+  left_join(teams_ids) %>%
+  left_join(team_colours_tibble) %>% 
+  mutate(player_name_last = str_replace(player_name_last, "Downy", "Downie"),
+         shot_time_mins = parse_number(time_of_period),
+         shot_time_secs = as.numeric(str_extract(time_of_period, "(?<=:)\\d\\d")),
+         shot_time_decimal = shot_time_mins + shot_time_secs/60,
+         goal_na = case_when(goal == T ~ 1),
+         goal_team = paste0(team_label, period_of_game, goal_na),
+         diff_time_goals = case_when(goal == T ~ lead(shot_time_decimal[goal_na==1], order_by = goal_team)),
+         diff_time_goals = diff_time_goals - shot_time_decimal,
+         parentheses = case_when(goal == T & power_play == 1 ~ " (PP)",
+                                 goal == T & short_handed == 1 ~ " (SH)",
+                                 goal == T & empty_net == 1 ~ " (EN)",
+                                 TRUE ~ ""),
+         #player_name_last = case_when(str_detect(player_name_last, "-") ~ str_replace(player_name_last, "-", "-\n"),
+         #                             TRUE ~ player_name_last),
+         goal_scorer = ifelse(goal == T, paste0(player_name_last, parentheses), ""),
+         x1 = ifelse(goal == T, shot_time_decimal*-1, NA),
+         x2 = ifelse(goal == T, shot_time_decimal*-1, NA),
+         y1 = ifelse(goal == T, 0, NA),
+         y2 = ifelse(goal == T, 117, NA),
+         x_for_text = case_when(game_id == 26 & goal == TRUE & sec_from_start == 3294 ~ shot_time_decimal -.75,
+                                game_id == 26 & goal == TRUE & sec_from_start == 3338 ~ shot_time_decimal,
+                                game_id == 26 & goal == TRUE & sec_from_start == 3393 ~ shot_time_decimal +.75,
+                                diff_time_goals < 1 ~ shot_time_decimal-.75, 
+                                TRUE ~ shot_time_decimal),
+         period_of_game = factor(period_of_game)) %>%
+    group_by(team_label, period_of_game) %>%
+    add_count(name = "num_shots_period") %>%
+    ungroup()
+  
+  text_data_win <- p_data %>%
+    filter(goal == TRUE) %>%
+    filter(team_label == win_team) %>%
+    mutate(shot_time_decimal = x_for_text)
+  
+  text_data_lose <- p_data %>%
+    filter(goal == TRUE) %>%
+    filter(team_label == lose_team) %>%
+    mutate(shot_time_decimal = x_for_text)
+  
+  win_shots <- p_data %>%
+    filter(team_label == win_team) %>%
+    nrow()
+  
+  lose_shots <- p_data %>%
+    filter(team_label == lose_team) %>%
+    nrow()
+  
+  num_periods <- length(unique(p_data$period_of_game))
+  
+  if (num_periods == 4) {
+    plot_scales <- list(
+  scale_x_continuous(limits = c(-20, 0), breaks = c(-20, -15, -10, -5), labels = c("20:00", "15:00", "10:00", "5:00")),
+  scale_x_continuous(limits = c(-20, 0), breaks = c(-20, -15, -10, -5), labels = c("20:00", "15:00", "10:00", "5:00")),
+  scale_x_continuous(limits = c(-20, 0), breaks = c(-20, -15, -10, -5), labels = c("20:00", "15:00", "10:00", "5:00")),
+  scale_x_continuous(limits = c(-5, 0), breaks = c(-5, 0), labels = c("5:00", "0:00"))
+    )
+   period_labs <- c("1st Period", "2nd Period", "3rd Period", "OT")
+  names(period_labs) <- c(1, 2, 3, 4)
+  ot_goal <- p_data %>%
+    filter(goal == TRUE) %>%
+    filter(period_of_game == 4) 
+  if (nrow(ot_goal) > 0) {
+    game_mins <- ot_goal %>%
+      pull(shot_time_mins) + 61
+  } else {
+    game_mins <- 65
+  }
+  
+  } else {
+     plot_scales <- list(
+  scale_x_continuous(limits = c(-20, 0), breaks = c(-20, -15, -10, -5), labels = c("20:00", "15:00", "10:00", "5:00")),
+  scale_x_continuous(limits = c(-20, 0), breaks = c(-20, -15, -10, -5), labels = c("20:00", "15:00", "10:00", "5:00")),
+  scale_x_continuous(limits = c(-20, 0), breaks = c(-20, -15, -10, -5), labels = c("20:00", "15:00", "10:00", "5:00"))
+  )
+        period_labs <- c("1st Period", "2nd Period", "3rd Period")
+  names(period_labs) <- c(1, 2, 3)
+  game_mins <- 60
+  }
+  
+  #winner plot
+  win_plot <- p_data %>%
+    filter(team_label == win_team) %>%
+    ggplot(aes(x = desc(shot_time_decimal), y = desc(after_stat(count)*game_mins), fill = colour)) +
+    geom_hline(yintercept = c(-55, -110), color = "#555555", linetype = "dotted") +
+    geom_segment(aes(x = x1, y = y1*-1, xend = x2, yend = y2*-1), color = "#333333") +
+    geom_density( bw=1, color = NA) +
+    #facet_wrap(~period_of_game, ncol = 1) + 
+    facet_grid(period_of_game ~ team_label, drop = F, scales = "free", space = "free") +
+    geom_text(data = text_data_win, aes(label =goal_scorer, y = -117, color = colour), hjust = 1, fontface = "bold") +
+    coord_flip() +
+    scale_y_continuous(breaks = c(-110, -55), labels = c(110, 55), limits = c(-215, 0)) +
+    facetted_pos_scales(x = plot_scales) +
+    scale_fill_identity() +
+    scale_color_identity() +
+    labs(y = "Shots per 60 mins",
+         title = paste0("<span style = 'color:", win_color, "'>", win_team, " - ", win_score, "</span>
+                        <br />
+                        <span style = 'color:", win_color, ";font-size:15px'>(", win_shots, " shots)", "</span>")) +
+    theme_void() + 
+    labs(caption = paste0("\nData source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam\nInspired by plots by Micah Blake McCurdy")) +
+    theme(strip.text = element_blank(),
+          strip.background = element_blank(),
+          strip.placement = "outside",
+          legend.position = "none",
+          axis.text.x = element_text(color = "#555555"),
+          axis.title.x = element_text(),
+          plot.title = element_markdown(hjust = .5, face = "bold"),
+          plot.margin = margin(0, 0, 0, 0, "pt"),
+          plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        plot.caption.position = "plot") 
+  
+  #Loser plot
+  
+ 
+
+  lose_plot <- p_data %>%
+    filter(team_label == lose_team) %>%
+    ggplot(aes(x = desc(shot_time_decimal), y = after_stat(count)*60, fill = colour)) +
+    geom_hline(yintercept = c(55, 110), color = "#555555", linetype = "dotted") +
+    geom_segment(aes(x = x1, y = y1, xend = x2, yend = y2), color = "#333333") +
+    geom_density( bw=1, color = NA) +
+    #facet_wrap(~period_of_game, ncol = 1) + 
+    facet_grid(period_of_game ~ team_label, drop = FALSE, scales = "free", space = "free",
+               labeller = labeller(period_of_game = period_labs)) +
+    coord_flip() +
+    scale_y_continuous(breaks = c(55, 110), labels = c(55, 110), limits = c(0, 215)) +
+    facetted_pos_scales(x = plot_scales) +
+    #scale_x_continuous(breaks = c(-20, -15, -10, -5), labels = c("20:00", "15:00", "10:00", "5:00")) +
+    scale_fill_identity() +
+    scale_color_identity() +
+    labs(y = "Shots per 60 mins",
+         title = paste0("<span style = 'color:", lose_color, "'>", lose_team, " - ", lose_score, "</span>
+                        <br />
+                        <span style = 'color:", lose_color, ";font-size:15px'>(", lose_shots, " shots)", "</span>")) +
+    theme_void() +
+    theme(strip.text.x = element_blank(),
+          strip.text.y = element_text(angle = 270, color = "#DDDDDD", face = "bold", size = 15),
+          strip.background = element_blank(),
+          strip.placement = "outside",
+          legend.position = "none",
+          axis.text.x = element_text(color = "#555555"),
+          axis.text.y = element_text(color = "#555555"),
+          axis.title.x = element_text(),
+          plot.title = element_markdown(hjust = .5, face = "bold"),
+          plot.margin = margin(0, 0, 0, 0, "pt")) 
+  
+  if (nrow(text_data_lose) > 0) {
+    lose_plot <- lose_plot +
+    geom_text(data = text_data_lose, aes(label =goal_scorer, y = 117, color = colour), hjust = 0, fontface = "bold")
+  }
+  
+  if (1 %in% unique(p_data$num_shots_period[p_data$team_label == win_team])) {
+    plot_points_win <- p_data %>%
+      filter(num_shots_period == 1 & team_label == win_team)
+    win_plot <- win_plot +
+      geom_point(data = plot_points_win, aes(y = -3, color = colour), size = 3)
+  }
+  
+  if (1 %in% unique(p_data$num_shots_period[p_data$team_label == lose_team])) {
+    plot_points_lose <- p_data %>%
+      filter(num_shots_period == 1 & team_label == lose_team)
+    lose_plot <- lose_plot +
+      geom_point(data = plot_points_lose, aes(y = 3, color = colour), size = 3)
+  }
+  
+  win_plot + lose_plot + plot_annotation(
+  title = "Shot Rate Density Over Course of Game",
+  subtitle = game_date,
+  theme = theme(plot.title = element_text(size = 18, hjust = .5),
+                plot.subtitle = element_text(size = 15, hjust = .5))) + 
+    inset_element(pwhl_logo, left = .9, bottom = 0, right = 1, top = .05, align_to = "full") 
+  
+  ggsave(here(paste0("visualizations/shot_density/", win_team, "_", date_for_file, ".png")), height = 9.5, width = 6, units = "in")
+}
+
+
+```
+
+#Faceoff wins
+
+```{r}
+round_up = function(x,to=5){ifelse(x == 0, (to) * ceiling((x +1 ) / to), to * ceiling(x/to))}
+
+offensive_zones <- game_plays %>%
+  left_join(teams_ids) %>%
+  filter(event == "shot") %>%
+  group_by(game_id, period_of_game, team_label, home_team, away_team) %>%
+  mutate(faceoff_zone = case_when(x_coord < 75 ~ "left",
+                               x_coord < 125 ~ "neutral",
+                               x_coord < 201 ~ "right"),
+         zone_type = "offensive") %>%
+  ungroup() %>%
+  count(game_id, period_of_game, team_label, faceoff_zone, zone_type, home_team, away_team) %>%
+  group_by(game_id, period_of_game, team_label) %>%
+  filter(n == max(n)) %>%
+  ungroup() %>%
+  filter(period_of_game < 4) %>%
+  select(-n)
+
+shots_after_faceoffs <- game_plays %>% 
+  #2 games are missing the inital faceoff for some reason. Add them in:
+  bind_rows(tibble(game_id = c(4, 61),
+                   sec_from_start = 0,
+                   game_date = c("Wed, Jan 3", "Sun, Apr 28"),
+                   event = "faceoff",
+                   home_win = c(1,0),
+                   home_team = c("Boston", "New York"),
+                   away_team = c("Minnesota", "Toronto"),
+                   period_of_game = 1)) %>%
+  mutate(game_date = (lubridate::ymd(paste0("2024 ", str_remove(game_date, ".*, "))))) %>%
+  arrange(game_date, game_id, sec_from_start) %>%
+  filter(period_of_game < 4) %>% 
+  select(game_id, game_date, home_team_id, home_team, away_team_id, away_team, event, team_id, period_of_game, time_of_period, player_id, player_name_last, player_name_first, home_win, contains("coord"), sec_from_start, power_play, short_handed, empty_net, start_power_play, end_power_play) %>% 
+  left_join(teams_ids) %>%
+  mutate(team_label = case_when(event == "faceoff" & home_win == 1 ~ home_team,
+                                event == "faceoff" & home_win == 0 ~ away_team,
+                                TRUE ~ team_label)) %>%
+  filter(event %in% c("faceoff", "shot")) %>%
+  mutate(faceoff_winner = case_when(event == "faceoff" ~ team_label),
+         faceoff_time = case_when(event == "faceoff" ~ sec_from_start)) %>% 
+  fill(faceoff_winner, .direction = "down") %>%
+  fill(faceoff_time, .direction = "down") %>% 
+  mutate(secs_from_faceoff = sec_from_start - faceoff_time,
+         faceoff_zone = case_when(event == "faceoff" & x_coord < 75 ~ "left",
+                          event == "faceoff" & x_coord < 125 ~ "neutral",
+                          event == "faceoff" & x_coord < 201 ~ "right"))  %>%
+  left_join(offensive_zones) %>%
+  mutate(zone_type = case_when(faceoff_zone == "neutral" ~ "neutral",
+                               !is.na(faceoff_zone) & is.na(zone_type) ~ "defensive",
+                               TRUE ~ zone_type)) %>% 
+  fill(faceoff_zone, .direction = "down") %>%
+  fill(zone_type, .direction = "down") %>%
+  mutate(shot_type = case_when(faceoff_winner == team_label & event == "shot" ~ "faceoff_win",
+                               event == "shot" ~ "faceoff_loss"),
+         secs_from_faceoff_binned = round_up(secs_from_faceoff, 5)) %>% 
+  filter(event == "shot" & is.na(power_play) & is.na(short_handed) & is.na(empty_net)) %>% 
+  count(shot_type, zone_type, secs_from_faceoff_binned) %>%
+  pivot_wider(names_from = "shot_type", values_from = "n") %>% 
+  mutate(across(contains("faceoff"), ~replace_na(., 0))) %>%
+  mutate(shot_diff = faceoff_win - faceoff_loss)
+  
+  
+  
+
+shots_after_faceoffs %>% 
+  filter(secs_from_faceoff_binned <= 100) %>%
+  ggplot(aes(x = secs_from_faceoff_binned, y = shot_diff, color = zone_type, fill = zone_type)) + 
+  geom_col(position = "dodge") +
+  geom_smooth(se = F) +
+  #geom_histogram(alpha = .25, position = "dodge") +
+  geom_density(aes(y = after_stat(count)*10), alpha = .25) 
+
+```
+
+#Shots heatmap
+```{r}
+rink = png::readPNG(here("data/rink.png"))
+
+
+teams_ids <- pwhl_teams() %>%
+  select(team_label, team_id) %>%
+  mutate(team_id = as.numeric(team_id))
+
+n_games_played <- games %>%
+  filter(game_played == T) %>%
+  nrow()
+
+shots_for <- game_plays %>%
+  filter(event %in% c("shot", "goal")) %>%
+  group_by(game_id, period_of_game, time_of_period, x_coord, y_coord) %>%
+  fill(empty_net, .direction = "updown") %>%
+  fill(power_play, .direction = "updown") %>%
+  fill(short_handed, .direction = "updown") %>%
+  ungroup() %>% 
+  filter(event == "shot") %>%
+  left_join(teams_ids) %>%
+  select(-(contains("plus"))) %>%
+  select(-(contains("minus"))) %>%
+  mutate(x = case_when(x_coord > 100 ~ x_coord,
+                       x_coord <= 100 ~ 200 - x_coord),
+         y = case_when(x_coord > 100 ~ y_coord,
+                       x_coord <= 100 ~ 85 - y_coord),
+         who_shot = "shot_for",
+         shot_team = team_label)
+
+
+shots_against <- shots_for %>%
+  mutate(shot_team = team_label,
+         team_label = case_when(team_label == home_team ~ away_team,
+                                team_label == away_team ~ home_team)) %>%
+  mutate(x = case_when(x_coord > 100 ~ 200 - x_coord,
+                       x_coord <= 100 ~ x_coord),
+         y = case_when(x_coord > 100 ~ 85 - y_coord,
+                       x_coord <= 100 ~ y_coord),
+         who_shot = "shot_against")
+
+all_shots <- shots_for %>%
+  bind_rows(shots_against) 
+
+#function to compare team's shot locations to all other teams', adapted from Malhar Shah's code
+
+density_compare <- function(shots_data,team_name, n = c(85, 200)){
+  team_shots<- shots_data %>% 
+    select(x, y, team_label) %>% 
+    filter(str_detect(team_label, team_name))
+  
+  other_shots <- shots_data %>% 
+    select(x, y, team_label) %>% 
+    filter(!str_detect(team_label, team_name))
+  
+   # get x/y coords as vectors
+  team_shots_x <- team_shots %>% pull(x)
+  team_shots_y <- team_shots %>% pull(y)
+  
+  # get x/y coords as vectors
+  other_shots_x <- other_shots %>% pull(x)
+  other_shots_y <- other_shots %>% pull(y)
+  
+  x_rng = range(c(team_shots_x, other_shots_x))
+  y_rng = range(c(team_shots_y, other_shots_y))
+  
+
+  # Explicitly calculate bandwidth for future use
+  bandwidth_x <- MASS::bandwidth.nrd(c(team_shots_x, other_shots_x))
+  bandwidth_y <- MASS::bandwidth.nrd(c(team_shots_y, other_shots_y))
+  
+  bandwidth_calc <- c(bandwidth_x, bandwidth_y)
+  
+  # Calculate the 2d density estimate over the common range
+  density_team = MASS::kde2d(team_shots_x, team_shots_y, h = bandwidth_calc, n=n, lims=c(x_rng, y_rng))
+  density_other = MASS::kde2d(other_shots_x, other_shots_y, h = bandwidth_calc, n=n, lims=c(x_rng, y_rng))
+  
+  # create diff df
+  team_diff <- density_team
+  
+  # matrix subtraction density from qb2 from qb1
+  team_diff$z <- density_team$z - density_other$z
+  
+  # add matrix col names
+  colnames(team_diff$z) = team_diff$y
+  
+  #### return tidy tibble ####
+  team_diff$z %>% 
+    # each col_name is actually the y from the matrix
+    as_tibble() %>% 
+    # add back the x
+    mutate(x= team_diff$x) %>% 
+    pivot_longer(-x, names_to = "y", values_to = "z") %>% 
+    mutate(y = as.double(y),
+           bandwidth = list(bandwidth_calc))
+}
+
+
+for (team in teams_ids$team_label) {
+
+team_colour <- team_colours[team]
+shots_data <- density_compare(all_shots, team_name = team)
+goals_data <- all_shots %>% 
+  filter(team_label==team, goal == 1, empty_net == 0) %>%
+  select(-team_label) %>%
+  rename(team_label = shot_team) %>%
+  left_join(team_colours_tibble) 
+
+p <- shots_data %>% 
+  ggplot()+
+  geom_raster(aes(x,y,fill=z))+
+  stat_contour(aes(x,y,color=after_stat(level),z=z))+
+  scale_fill_gradient2(low="#365C8D",mid="white", high="#fc3a57", midpoint=0) +
+  scale_color_gradient2(low="#5a7da8", mid="white", high="#fc7184", midpoint=0) +
+  guides(color="none", fill="none") +
+  ggtitle(paste("<span style = 'color:", team_colour, ";font-size:12px;'>Shots Against</span><span style = 'color:#FFFFFF; font-size:12px;'>space</span><span style = 'color:", team_colour, "; font-size:18px'>", team, "</span><span style = 'color:#FFFFFF; font-size:12px;'>spacer</span><span style = 'color:", team_colour, ";font-size:12px'>Shots For</span></span><span style = 'color:#FFFFFF; font-size:12px;'>ex</span>"))+
+  scale_y_continuous(limits = c(0, 85), expand = c(-.01, -.01))+
+  scale_x_continuous(limits = c(0, 200), expand = c(-.01, -.01)) +
+  background_image(rink) +
+  ggnewscale::new_scale_color() +
+  geom_point(data=goals_data,aes(x = x, y = y, color = colour), alpha = .5, size = 1, shape = 4)+
+  scale_color_identity() +
+  theme_void() +
+  theme(plot.title = element_markdown(hjust = .5, face="bold"),
+        plot.margin = unit(c(.25,.25,.25,.25), "cm"))
+
+
+name<-paste0("shotplot_",team)
+assign(name,p)
+}
+
+(shotplot_Boston | shotplot_Minnesota) / (shotplot_Montreal | `shotplot_New York`) / (shotplot_Ottawa | shotplot_Toronto) +
+    inset_element(pwhl_logo, left = .95, bottom = -.15, right = 1, top = .025, align_to = "full") +
+  plot_annotation(title = "PWHL inaugural season:\nRelative shot location density for PWHL teams",
+                  subtitle = "<span style = 'color:#fc3a57'>Red areas</span><span style = 'color:#555555'> indicate more shots taken by a team compared to all other teams<br /></span><span style = 'color:#365C8D'>Blue areas</span><span style = 'color:#555555'> indicate fewer shots taken by a team compared to all other teams<br />X marks indicate goals</span>",
+                  caption = paste0("Data source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam\nAdapted from code by Malhar Shah"),
+                  theme = theme(plot.title = element_text(size = 18, hjust = .5))) & 
+  theme(plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        plot.caption.position = "plot",
+        plot.subtitle = element_markdown(size = 12, hjust = .5)) 
+
+ggsave(here(paste0("visualizations/shot_location_density", col_scheme, "_colours.png")), width = 2500, height = 2300, units = "px")
+
+```
+
+
+
+#TOI
+
+```{r}
+games_played_ids <- games %>%
+  filter(game_played == T) %>%
+  pull(game_id)
+
+player_stats <- read_csv(here("data/player_stats.csv")) %>%
+  mutate(toi = as.character(toi),
+         starting = as.character(starting))
+
+missing_games <- games_played_ids[games_played_ids %notin% player_stats$game_id]
+ if(length(missing_games) > 0){
+for(i in 1:length(missing_games)) {
+  game <- missing_games[[i]]
+  temp <- pwhl_player_box(game)$skaters %>%
+    mutate(player_id = as.numeric(player_id)) 
+  player_stats <- player_stats %>%
+    bind_rows(temp)
+}
+ }
+
+if (length(missing_games)  > 0) {
+player_stats %>% write_csv(here("data/player_stats.csv")) 
+}
+
+team_codes <- tibble(team_label = c("Boston", "Minnesota", "Montreal", "New York", "Ottawa", "Toronto"))
+
+teams_players <- tibble(player_id = numeric(), team_label = character())
+
+for (i in 1:6) {
+  team_label <- team_codes$team_label[[i]]
+  team_roster <- pwhl_team_roster(team_label) %>% select(player_id) %>% mutate(team_label = team_label, player_id = as.numeric(player_id)) 
+  teams_players <- teams_players %>%
+    bind_rows(team_roster)
+  
+}
+
+player_toi <- player_stats %>%
+  mutate(player = paste(first_name, last_name),
+         player_trunc = paste0(str_sub(first_name, 1, 1), ". ", last_name),
+         player_id = as.numeric(player_id)) %>%
+  group_by(player_id, player, player_trunc, last_name, position) %>%
+  summarize(toi = sum(time_on_ice)) %>%
+  left_join(teams_players, by = "player_id") %>%
+  arrange(desc(toi)) %>%
+  ungroup() %>%
+  mutate(toi_decimal = str_extract(as.character(toi), "(?<=\\.).*"),
+         toi_decimal = ifelse(is.na(toi_decimal), "0", toi_decimal),
+         toi_decimal = as.integer(toi_decimal)*6,
+         toi_text = paste0("     ", player, " – ", floor(toi), ":", str_pad(toi_decimal, width = 2, pad = "0", side = "right")),
+         toi_text_trunc = paste0("     ", player_trunc, " – ", floor(toi), ":", str_pad(toi_decimal, width = 2, pad = "0", side = "right")),
+         toi_text_last = paste0("     ", last_name, " – ", floor(toi), ":", str_pad(toi_decimal, width = 2, pad = "0", side = "right")),
+         position = case_when(position == "D" ~ "Defender",
+                              position == "F" ~ "Forward")) %>%
+  select(-toi_decimal)
+
+player_toi %>%
+ # group_by(position) %>%
+  slice_head(n = 10) %>%
+  ungroup() %>%
+  mutate(x_pos_text = case_when(lag(toi) - toi > 5 ~ toi,
+                                 is.na(lag(toi)) ~ toi,
+                                 TRUE ~ toi -3),
+         position = factor(position, levels = c("Defender", "Forward"))) %>%
+  ggplot(aes(x = toi, y = .1, color = team_label)) +
+  geom_hline(yintercept = .1, linetype = "dotted", color = "#DDDDDD")+
+  geom_point(size = 10, aes(shape = position)) +
+  geom_point(size = 10, alpha = .8, aes(shape = position)) +
+  geom_text(aes(label = toi_text_last, x = x_pos_text), angle = 60, hjust = 0, show.legend = FALSE) +
+  scale_shape_discrete(drop=FALSE) +
+  #ggrepel::geom_text_repel(aes(label = toi_text), angle = 60, hjust = 0, show.legend = FALSE) +
+  scale_color_manual(values = team_colours) +
+  scale_x_continuous(labe = scales::label_number(suffix = ":00"), limits = c(525, 700), breaks = c(550, 575, 600, 625, 650, 675)) +
+  scale_y_continuous(limits = c(0, 1)) +
+  theme_void() +
+  labs(x = "Time on Ice (minutes)",
+       title = "PWHL inaugural season:\nTop 10 players with the most ice time",
+       subtitle = "(All defenders)") +  
+  guides(colour = guide_legend(override.aes = list(size=5), nrow = 1, order = 1),
+         shape = guide_legend(override.aes = list(size=5, color = "#666666"), nrow = 1, order = 5)) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.direction = "vertical", 
+        legend.box = "vertical",
+        plot.title = element_text(hjust = .5),
+        plot.subtitle = element_text(hjust = .5),
+        axis.text.x = element_text(),
+        axis.title.x = element_text(margin = unit(c(.25,.0,.0,.0), "cm")),
+        panel.grid.major.x = element_line(color = "#DDDDDD", linetype = "dotted"),
+        plot.background = element_rect(fill = "white", color = "white"),
+        plot.caption = element_text(hjust = 0, color = "#777777", size = 7),
+        plot.caption.position = "plot") + 
+  labs(caption = paste0("Data source: fastRhockey R package, ", lubridate::today(), "\nCreated by Hilary Killam")) + 
+    inset_element(pwhl_logo, left = .95, bottom = .00, right = 1, top = .075, align_to = "full")
+
+ggsave(here(paste0("visualizations/time_on_ice", col_scheme, "_colours.png")), width = 2000, height = 1250, units = "px")
+
+```
+
+
