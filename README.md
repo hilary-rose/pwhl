@@ -3,18 +3,18 @@ Playing around with PWHL stats using the fastRhockey R package
 Code by Hilary Killam in 2024
 ## Visualizations
 ### Attendance
-<img src="https://github.com/hilary-rose/pwhl/assets/52216858/4f18a236-4f8b-4b3f-b4d6-73306877c2bc)
+<img src="https://github.com/hilary-rose/pwhl/assets/52216858/4f18a236-4f8b-4b3f-b4d6-73306877c2bc">
 ### Where Goals are Scored
-<img src="https://github.com/hilary-rose/pwhl/assets/52216858/1d781236-5b5c-47e7-8997-7205178af55c)
+<img src="https://github.com/hilary-rose/pwhl/assets/52216858/1d781236-5b5c-47e7-8997-7205178af55c">
 ### When Goals are Scored
-<img src="https://github.com/hilary-rose/pwhl/assets/52216858/10e8f385-a793-4644-a534-136f853e8540)
+<img src="https://github.com/hilary-rose/pwhl/assets/52216858/10e8f385-a793-4644-a534-136f853e8540">
 ### Shots Taken
-<img src="https://github.com/hilary-rose/pwhl/assets/52216858/610390fd-60b7-43af-b294-5d8c54e9424f)
+<img src="https://github.com/hilary-rose/pwhl/assets/52216858/610390fd-60b7-43af-b294-5d8c54e9424f">
 ### Penalties
-<img src="https://github.com/hilary-rose/pwhl/assets/52216858/4fd66cc4-4e79-4947-b093-620924145179)
-<img src="https://github.com/hilary-rose/pwhl/assets/52216858/c757ac41-a877-4a86-8c77-9657e5b4f0dd)
+<img src="https://github.com/hilary-rose/pwhl/assets/52216858/4fd66cc4-4e79-4947-b093-620924145179">
+<img src="https://github.com/hilary-rose/pwhl/assets/52216858/c757ac41-a877-4a86-8c77-9657e5b4f0dd">
 ### Time on Ice
-<img src="https://github.com/hilary-rose/pwhl/assets/52216858/5ad0edbf-58d2-43f4-a44c-1ce9dd3eddcc)
+<img src="https://github.com/hilary-rose/pwhl/assets/52216858/5ad0edbf-58d2-43f4-a44c-1ce9dd3eddcc">
 ### Shot Density Plots
 #### Games won by Boston
 <img src="https://github.com/hilary-rose/pwhl/assets/52216858/e3faa1f9-1c36-4d6f-9635-1e4e2c539244" width = "50%">
