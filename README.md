@@ -21,8 +21,8 @@ Code by Hilary Killam in 2024
 ### Time on Ice
 <img src="https://github.com/hilary-rose/pwhl/assets/52216858/5ad0edbf-58d2-43f4-a44c-1ce9dd3eddcc" width = "75%">
 
-### Shot Density Plots
-#### Games won by Boston
+## Shot Density Plots
+### Games won by Boston
 <img src="https://github.com/hilary-rose/pwhl/assets/52216858/e3faa1f9-1c36-4d6f-9635-1e4e2c539244" width = "50%">
 <img src="https://github.com/hilary-rose/pwhl/assets/52216858/a77b0fa2-3fc2-40a5-8091-24c11b72896c" width = "50%">
 <img src="https://github.com/hilary-rose/pwhl/assets/52216858/2f4fc536-125d-4f35-8ea1-36689d48e507" width = "50%">
