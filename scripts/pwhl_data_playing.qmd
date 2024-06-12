@@ -1708,5 +1708,3 @@ player_toi %>%
 ggsave(here(paste0("visualizations/time_on_ice", col_scheme, "_colours.png")), width = 2000, height = 1250, units = "px")
 
 ```
-
-
